@@ -21,9 +21,11 @@ export const DEMO = {
 } as const;
 
 export type Role = "landlord" | "renter";
+/** What an account signs up as: one role, or both. */
+export type Roles = Role | "both";
 
 export type TestUser = {
-  role: Role;
+  role: Roles;
   name: string;
   email: string;
   password: string;
@@ -38,12 +40,14 @@ export function uid(): string {
   return `${Date.now().toString(36)}${counter.toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 }
 
+const FIRST_NAME: Record<Roles, string> = { landlord: "Lana", renter: "Remy", both: "Bo" };
+
 /** A brand-new user (not yet signed up) with a unique name and email. */
-export function makeUser(role: Role, overrides: Partial<TestUser> = {}): TestUser {
+export function makeUser(role: Roles, overrides: Partial<TestUser> = {}): TestUser {
   const id = uid();
   return {
     role,
-    name: `${role === "landlord" ? "Lana" : "Remy"} E2e${id}`,
+    name: `${FIRST_NAME[role]} E2e${id}`,
     email: `e2e-${role}-${id}@example.com`,
     password: `pw-${id}-secret`,
     city: "Testville, TS",
@@ -51,11 +55,25 @@ export function makeUser(role: Role, overrides: Partial<TestUser> = {}): TestUse
   };
 }
 
+export const ROLE_CHECKBOX: Record<Role, string> = { renter: "I'm a renter", landlord: "I'm a landlord" };
+
+/** The sign-up form's "I'm a renter" / "I'm a landlord" checkbox. */
+export function roleCheckbox(page: Page, role: Role): Locator {
+  return page.getByRole("checkbox", { name: ROLE_CHECKBOX[role] });
+}
+
+/** Tick exactly the sign-up checkboxes for `roles` (and untick the other one). */
+export async function pickRoles(page: Page, roles: Roles): Promise<void> {
+  for (const role of ["renter", "landlord"] as const) {
+    const wanted = roles === "both" || roles === role;
+    await roleCheckbox(page, role).setChecked(wanted);
+    await expect(roleCheckbox(page, role)).toBeChecked({ checked: wanted });
+  }
+}
+
 /** Fill and submit the sign-up form. Doesn't wait for the result. */
 export async function fillSignup(page: Page, user: TestUser): Promise<void> {
-  const roleLabel = user.role === "landlord" ? "I'm a landlord" : "I'm a renter";
-  await page.locator("label", { hasText: roleLabel }).click();
-  await expect(page.getByRole("radio", { name: roleLabel })).toBeChecked();
+  await pickRoles(page, user.role);
   await page.getByLabel("Name", { exact: true }).fill(user.name);
   await page.getByLabel("Email").fill(user.email);
   await page.getByLabel("Password").fill(user.password);
@@ -100,12 +118,20 @@ export async function logOut(page: Page): Promise<void> {
   await expect(page.getByRole("link", { name: "Log in" })).toBeVisible();
 }
 
-/** The signed-in user's public profile path, read from the dashboard. */
+/**
+ * The signed-in user's public profile path, read from the dashboard (their
+ * landlord page if they're both).
+ */
 export async function myProfilePath(page: Page): Promise<string> {
   await page.goto("/dashboard");
   const href = await page.getByRole("link", { name: "View public profile" }).getAttribute("href");
   expect(href).toMatch(/^\/(landlords|renters)\/[0-9a-f-]{36}$/);
   return href!;
+}
+
+/** "/landlords/<id>" → "/renters/<id>" and back: the same person's other role page. */
+export function otherRolePath(path: string): string {
+  return path.startsWith("/landlords/") ? path.replace("/landlords/", "/renters/") : path.replace("/renters/", "/landlords/");
 }
 
 export type Actor = {
@@ -119,7 +145,7 @@ export type Actor = {
 /** Sign up a fresh user in their own browser context (separate cookies). */
 export async function createActor(
   browser: Browser,
-  role: Role,
+  role: Roles,
   overrides: Partial<TestUser> = {},
 ): Promise<Actor> {
   const context = await browser.newContext();
@@ -183,6 +209,14 @@ export async function fillReview(
   await reviewBodyInput(page).fill(review.body);
 }
 
+/**
+ * A directory card's meta line, item by item: role badge, property count,
+ * "· Also a …", "· Account closed".
+ */
+export async function cardMeta(card: Locator): Promise<string[]> {
+  return (await card.locator(":scope > div").last().locator(":scope > *").allInnerTexts()).map((t) => t.trim());
+}
+
 /** A review card (article) containing `text`. */
 export function reviewCard(page: Page, text: string): Locator {
   return page.locator("article").filter({ hasText: text });
@@ -234,11 +268,47 @@ export function propertyLabel(p: NewProperty): string {
   return p.unit ? `${p.address}, Unit ${p.unit}` : p.address;
 }
 
+/**
+ * Who the property belongs to, as the add-property form asks it:
+ * - a landlord's name: pick them in the "Landlord" list (renters);
+ * - { relation: "own" }: "Own or manage" (people with both roles);
+ * - { relation: "rent", landlord? }: "Rent or used to rent", then optionally
+ *   pick the landlord (people with both roles).
+ */
+export type PropertyOwner = string | { relation: "own" } | { relation: "rent"; landlord?: string };
+
+export const RELATION_LABEL = { own: "Own or manage", rent: "Rent or used to rent" } as const;
+
+/** The "This is a place I…" radio group shown to people with both roles. */
+export function relationGroup(page: Page): Locator {
+  return page.getByRole("radiogroup", { name: "This is a place I…" });
+}
+
+export function relationRadio(page: Page, relation: "own" | "rent"): Locator {
+  return relationGroup(page).getByRole("radio", { name: RELATION_LABEL[relation] });
+}
+
+/**
+ * The add-property form's "Landlord" list. (Not getByLabel("Landlord"): for
+ * people with both roles that also matches the "Own or manage … your
+ * landlord profile" radio.)
+ */
+export function landlordSelect(page: Page): Locator {
+  return page.getByRole("combobox", { name: /^Landlord\b/ });
+}
+
+/** Pick `landlordName` in the add-property form's "Landlord" list. */
+export async function pickLandlord(page: Page, landlordName: string): Promise<void> {
+  const select = landlordSelect(page);
+  const option = select.locator("option", { hasText: landlordName });
+  await select.selectOption(await option.getAttribute("value"));
+}
+
 /** Fill the add-property form (on /properties/new) and submit it. */
 export async function fillPropertyForm(
   page: Page,
   property: NewProperty,
-  landlordName?: string,
+  owner?: PropertyOwner,
 ): Promise<void> {
   await page.getByLabel("Street address").fill(property.address);
   await page.getByLabel("Unit").fill(property.unit ?? "");
@@ -246,10 +316,11 @@ export async function fillPropertyForm(
   await page.getByLabel("State / region").fill(property.region);
   await page.getByLabel("ZIP / postal code").fill(property.postalCode ?? "");
   await page.getByLabel("Short description").fill(property.description ?? "");
-  if (landlordName) {
-    const select = page.getByLabel("Landlord");
-    const option = select.locator("option", { hasText: landlordName });
-    await select.selectOption(await option.getAttribute("value"));
+  if (typeof owner === "string") {
+    await pickLandlord(page, owner);
+  } else if (owner) {
+    await relationRadio(page, owner.relation).check();
+    if (owner.relation === "rent" && owner.landlord) await pickLandlord(page, owner.landlord);
   }
   await page.getByRole("button", { name: "Add property" }).click();
 }
@@ -258,10 +329,10 @@ export async function fillPropertyForm(
 export async function addProperty(
   page: Page,
   property: NewProperty,
-  landlordName?: string,
+  owner?: PropertyOwner,
 ): Promise<string> {
   await page.goto("/properties/new");
-  await fillPropertyForm(page, property, landlordName);
+  await fillPropertyForm(page, property, owner);
   await expect(page).toHaveURL(/\/properties\/[0-9a-f-]{36}$/);
   await expect(page.getByRole("heading", { level: 1, name: propertyLabel(property) })).toBeVisible();
   return new URL(page.url()).pathname;

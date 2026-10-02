@@ -79,6 +79,15 @@
 
 html {
   color-scheme: light dark;
+  /* Keep anchor targets and focused fields clear of the sticky header, which
+     wraps to two or three rows on small screens. */
+  scroll-padding-top: 9rem;
+}
+
+@media (min-width: 48rem) {
+  html {
+    scroll-padding-top: 5rem;
+  }
 }
 
 body {

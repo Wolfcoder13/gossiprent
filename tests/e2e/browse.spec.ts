@@ -508,20 +508,40 @@ test.describe("not found", () => {
     });
   }
 
-  test("a landlord's id under /renters (and vice versa) is a 404", async ({ page }) => {
-    const landlordPath = await findPersonPath(page, "landlord", "Sam Whitfield");
-    const renterPath = await findPersonPath(page, "renter", "Tom Becker");
+  test("a landlord's id under /renters (and vice versa) goes to the page for the role they have", async ({
+    page,
+    request,
+  }) => {
+    const landlordPath = await findPersonPath(page, "landlord", DEMO.landlords.maria.name);
+    const renterPath = await findPersonPath(page, "renter", DEMO.renters.tom.name);
     const landlordId = landlordPath.split("/").pop();
     const renterId = renterPath.split("/").pop();
 
-    let response = await page.goto(`/renters/${landlordId}`);
-    expect(response?.status()).toBe(404);
-    await expect(notFoundHeading(page)).toBeVisible();
-    await expect(page).toHaveTitle("Renter not found · GossipRent");
+    // A plain redirect, not a 404.
+    let response = await request.get(`/renters/${landlordId}`, { maxRedirects: 0 });
+    expect(response.status()).toBe(307);
+    expect(response.headers()["location"]).toBe(landlordPath);
+    response = await request.get(`/landlords/${renterId}`, { maxRedirects: 0 });
+    expect(response.status()).toBe(307);
+    expect(response.headers()["location"]).toBe(renterPath);
 
-    response = await page.goto(`/landlords/${renterId}`);
-    expect(response?.status()).toBe(404);
-    await expect(notFoundHeading(page)).toBeVisible();
+    const page1 = await page.goto(`/renters/${landlordId}`);
+    expect(page1?.status()).toBe(200);
+    await expect(page).toHaveURL(landlordPath);
+    await expect(page.getByRole("heading", { level: 1, name: DEMO.landlords.maria.name })).toBeVisible();
+    await expect(notFoundHeading(page)).toHaveCount(0);
+
+    await page.goto(`/landlords/${renterId}`);
+    await expect(page).toHaveURL(renterPath);
+    await expect(page.getByRole("heading", { level: 1, name: DEMO.renters.tom.name })).toBeVisible();
+
+    // Sam Whitfield is both, so both of his pages exist.
+    const samLandlord = await findPersonPath(page, "landlord", DEMO.landlords.sam.name);
+    const samId = samLandlord.split("/").pop();
+    const samRenter = await page.goto(`/renters/${samId}`);
+    expect(samRenter?.status()).toBe(200);
+    await expect(page).toHaveURL(`/renters/${samId}`);
+    await expect(page).toHaveTitle(`${DEMO.landlords.sam.name} — renter reviews · GossipRent`);
   });
 });
 
@@ -676,8 +696,8 @@ test.describe("on a phone (390px wide)", () => {
 
   test("no review button where you can't review", async ({ page }) => {
     const mariaPath = await findPersonPath(page, "landlord", "Maria Gonzalez");
-    // Landlords can't review landlords.
-    await logIn(page, DEMO.landlords.sam.email, DEMO_PASSWORD);
+    // Landlords can't review landlords (Priya is only a landlord; Sam is also a renter).
+    await logIn(page, DEMO.landlords.priya.email, DEMO_PASSWORD);
     await page.goto(mariaPath);
     await expect(page.getByRole("heading", { level: 1, name: "Maria Gonzalez" })).toBeVisible();
     await expect(page.getByRole("link", { name: /^Review Maria Gonzalez$|^Edit your review$/ })).toHaveCount(0);

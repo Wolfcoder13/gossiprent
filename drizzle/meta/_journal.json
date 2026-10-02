@@ -15,6 +15,20 @@
       "when": 1790967508549,
       "tag": "0001_soft_delete_and_rate_limits",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1790977001666,
+      "tag": "0002_dual_roles",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1790979133842,
+      "tag": "0003_keep_legacy_role_optional",
+      "breakpoints": true
     }
   ]
 }

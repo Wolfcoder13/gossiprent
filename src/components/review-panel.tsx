@@ -1,7 +1,9 @@
+import Link from "next/link";
 import type { ReactNode } from "react";
 import type { ReviewKind } from "@/db/schema";
 import type { SessionUser } from "@/lib/auth/current-user";
 import type { ReviewItem } from "@/lib/data";
+import { hasRole } from "@/lib/roles";
 import { ReviewForm } from "./review-form";
 import { ButtonLink, Card } from "./ui";
 
@@ -65,11 +67,21 @@ export function ReviewPanel({
     );
   } else if (ownerNote) {
     content = <p className="text-sm text-muted">{ownerNote}</p>;
-  } else if (viewer.role !== reviewerRole) {
-    content = (
+  } else if (!hasRole(viewer, reviewerRole)) {
+    const addRole = (
+      <Link href={`/dashboard?next=${next}#roles`} className="font-semibold text-brand hover:underline">
+        add the {reviewerRole} role to your account
+      </Link>
+    );
+    content = existing ? (
       <p className="text-sm text-muted">
-        Only {reviewerRole}s can review {kind === "property" ? "properties" : `${kind}s`}. You&apos;re signed
-        in as a {viewer.role}.
+        You reviewed {subjectName} as a {reviewerRole}. To edit that review, {addRole} again. You can
+        still delete it from the reviews list.
+      </p>
+    ) : (
+      <p className="text-sm text-muted">
+        Only {reviewerRole}s can review {kind === "property" ? "properties" : `${kind}s`}. If you
+        {reviewerRole === "renter" ? " rent too" : " rent out a home too"}, {addRole}.
       </p>
     );
   } else {
@@ -98,17 +110,25 @@ export function ReviewPanel({
 
   return (
     <Card as="section">
-      <div id="your-review" className="scroll-mt-36 sm:scroll-mt-24">
+      <div id="your-review">
         {content}
       </div>
     </Card>
   );
 }
 
-export function ReviewsHeading({ id, count }: { id?: string; count: number }) {
+export function ReviewsHeading({
+  id,
+  count,
+  label = "Reviews",
+}: {
+  id?: string;
+  count: number;
+  label?: string;
+}) {
   return (
     <h2 id={id} className="text-xl font-bold tracking-tight text-ink">
-      Reviews <span className="font-normal text-muted">({count})</span>
+      {label} <span className="font-normal text-muted">({count})</span>
     </h2>
   );
 }

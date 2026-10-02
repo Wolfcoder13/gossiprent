@@ -4,12 +4,16 @@ import { and, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getDb, pgErrorCode } from "@/db";
-import { properties, users } from "@/db/schema";
+import { properties, reviews, users } from "@/db/schema";
 import { getCurrentUser } from "@/lib/auth/current-user";
 import { findPropertyByAddress, getProperty, isUuid } from "@/lib/data";
 import { formValues, parseForm, propertySchema, type FormState } from "@/lib/validation";
 
-/** Add a property. Landlords always add it as their own; renters may link a landlord. */
+/**
+ * Add a property. A landlord can list it as their own ("me"); a renter can
+ * link their landlord if they're on GossipRent. Someone who is only a
+ * landlord always lists it as their own.
+ */
 export async function createProperty(_prev: FormState, formData: FormData): Promise<FormState> {
   const user = await getCurrentUser();
   if (!user) return { status: "error", message: "Please log in to add a property." };
@@ -19,31 +23,45 @@ export async function createProperty(_prev: FormState, formData: FormData): Prom
   const data = parsed.data;
 
   const db = await getDb();
+  const fieldError = (message: string): FormState => ({
+    status: "error",
+    message: "Please fix the highlighted fields.",
+    fieldErrors: { landlordId: [message] },
+    values: formValues(formData),
+  });
+  // Someone with both roles must say whether they own or rent the place
+  // (older forms sent landlordId "me" instead).
+  const relation =
+    data.relation ?? (data.landlordId === "me" ? "own" : data.landlordId !== undefined ? "rent" : undefined);
+  if (user.isLandlord && user.isRenter && !relation) {
+    return {
+      status: "error",
+      message: "Please fix the highlighted fields.",
+      fieldErrors: { relation: ["Choose whether you own or rent this place."] },
+      values: formValues(formData),
+    };
+  }
   let landlordId: string | null = null;
-  if (user.role === "landlord") {
+  if (relation === "own" || data.landlordId === "me" || data.landlordId === user.id || !user.isRenter) {
+    if (!user.isLandlord) {
+      return fieldError("Only landlords can list themselves as the landlord.");
+    }
     landlordId = user.id;
   } else if (data.landlordId) {
     const [landlord] = await db
       .select({ id: users.id })
       .from(users)
       .where(
-        and(eq(users.id, data.landlordId), eq(users.role, "landlord"), isNull(users.deletedAt)),
+        and(eq(users.id, data.landlordId), eq(users.isLandlord, true), isNull(users.deletedAt)),
       )
       .limit(1);
-    if (!landlord) {
-      return {
-        status: "error",
-        message: "Please fix the highlighted fields.",
-        fieldErrors: { landlordId: ["That landlord isn't on GossipRent anymore."] },
-        values: formValues(formData),
-      };
-    }
+    if (!landlord) return fieldError("That landlord isn't on GossipRent anymore.");
     landlordId = landlord.id;
   }
 
   const duplicate = async (existingId: string): Promise<FormState> => {
     const existing = await getProperty(existingId);
-    const claimable = user.role === "landlord" && existing && !existing.landlord;
+    const claimable = user.isLandlord && existing && !existing.landlord;
     return {
       status: "error",
       message: claimable
@@ -62,19 +80,39 @@ export async function createProperty(_prev: FormState, formData: FormData): Prom
 
   let propertyId: string;
   try {
-    const [created] = await db
-      .insert(properties)
-      .values({
-        address: data.address,
-        unit: data.unit,
-        city: data.city,
-        region: data.region,
-        postalCode: data.postalCode,
-        description: data.description,
-        landlordId,
-        createdById: user.id,
-      })
-      .returning({ id: properties.id });
+    const created = await db.transaction(async (tx) => {
+      if (landlordId) {
+        // Re-check the landlord (you, or the one you picked) under a lock, so
+        // they can't drop the landlord role or close their account meanwhile.
+        const [landlord] = await tx
+          .select({ id: users.id })
+          .from(users)
+          .where(and(eq(users.id, landlordId), eq(users.isLandlord, true), isNull(users.deletedAt)))
+          .for("share");
+        if (!landlord) return null;
+      }
+      const [row] = await tx
+        .insert(properties)
+        .values({
+          address: data.address,
+          unit: data.unit,
+          city: data.city,
+          region: data.region,
+          postalCode: data.postalCode,
+          description: data.description,
+          landlordId,
+          createdById: user.id,
+        })
+        .returning({ id: properties.id });
+      return row;
+    });
+    if (!created) {
+      return fieldError(
+        landlordId === user.id
+          ? "Only landlords can list themselves as the landlord."
+          : "That landlord isn't on GossipRent anymore.",
+      );
+    }
     propertyId = created.id;
   } catch (error) {
     if (pgErrorCode(error) !== "23505") throw error;
@@ -96,27 +134,57 @@ function revalidatePropertyPages(propertyId: string, landlordIds: (string | null
   for (const id of landlordIds) if (id) revalidatePath(`/landlords/${id}`);
 }
 
-/** A landlord claims a listed property that has no landlord yet. */
+const CLAIM_MESSAGES = {
+  claimed: { status: "success", message: "Done. You're now listed as this property's landlord." },
+  "not-landlord": { status: "error", message: "Only landlords can claim a property." },
+  missing: { status: "error", message: "That property doesn't exist." },
+  taken: { status: "error", message: "Another landlord already manages this property." },
+  reviewed: {
+    status: "error",
+    message:
+      "You've reviewed this property as a renter, so you can't also be its landlord. Delete your review first.",
+  },
+} satisfies Record<string, FormState>;
+
+/**
+ * A landlord claims a listed property that has no landlord yet. Refused if
+ * they've reviewed it, since landlords can't review their own properties.
+ */
 export async function claimProperty(_prev: FormState, formData: FormData): Promise<FormState> {
   const user = await getCurrentUser();
   if (!user) return { status: "error", message: "Please log in again." };
-  if (user.role !== "landlord") {
-    return { status: "error", message: "Only landlords can claim a property." };
-  }
   const propertyId = formData.get("propertyId");
-  if (typeof propertyId !== "string" || !isUuid(propertyId)) {
-    return { status: "error", message: "That property doesn't exist." };
-  }
+  if (typeof propertyId !== "string" || !isUuid(propertyId)) return CLAIM_MESSAGES.missing;
+
   const db = await getDb();
-  const claimed = await db
-    .update(properties)
-    .set({ landlordId: user.id })
-    .where(and(eq(properties.id, propertyId), isNull(properties.landlordId)))
-    .returning({ id: properties.id });
-  revalidatePropertyPages(propertyId, [user.id]);
-  return claimed.length > 0
-    ? { status: "success", message: "Done. You're now listed as this property's landlord." }
-    : { status: "error", message: "Another landlord already manages this property." };
+  // Locks: the user row (so the landlord role can't be removed mid-claim) and
+  // the property row (so two claims, or a claim and a review, take turns).
+  const outcome = await db.transaction(async (tx) => {
+    const [me] = await tx
+      .select({ isLandlord: users.isLandlord })
+      .from(users)
+      .where(and(eq(users.id, user.id), isNull(users.deletedAt)))
+      .for("share");
+    if (!me?.isLandlord) return "not-landlord" as const;
+    const [property] = await tx
+      .select({ landlordId: properties.landlordId })
+      .from(properties)
+      .where(eq(properties.id, propertyId))
+      .for("update");
+    if (!property) return "missing" as const;
+    if (property.landlordId) return property.landlordId === user.id ? ("claimed" as const) : ("taken" as const);
+    const [reviewed] = await tx
+      .select({ id: reviews.id })
+      .from(reviews)
+      .where(and(eq(reviews.propertyId, propertyId), eq(reviews.authorId, user.id)))
+      .limit(1);
+    if (reviewed) return "reviewed" as const;
+    await tx.update(properties).set({ landlordId: user.id }).where(eq(properties.id, propertyId));
+    return "claimed" as const;
+  });
+  // Refresh even when refused, so the page shows who manages it now.
+  if (outcome !== "missing") revalidatePropertyPages(propertyId, [user.id]);
+  return CLAIM_MESSAGES[outcome];
 }
 
 /**

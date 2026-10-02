@@ -16,23 +16,40 @@ const email = z
   .max(254, "Email is too long.")
   .pipe(z.email("Enter a valid email address."));
 
-export const roleSchema = z.enum(["landlord", "renter"], {
-  error: "Choose whether you're a landlord or a renter.",
-});
+/** A checkbox: present ("on") when ticked, missing when not. */
+const checkbox = z
+  .string()
+  .optional()
+  .transform((value) => value === "on" || value === "true");
 
-export const signupSchema = z.object({
-  name: z
-    .string()
-    .trim()
-    .min(2, "Name must be at least 2 characters.")
-    .max(80, "Name must be 80 characters or fewer."),
-  email,
-  password: z
-    .string()
-    .min(8, "Password must be at least 8 characters.")
-    .max(128, "Password must be 128 characters or fewer."),
-  role: roleSchema,
-  city: optionalText(80, "City"),
+const name = z
+  .string()
+  .trim()
+  .min(2, "Name must be at least 2 characters.")
+  .max(80, "Name must be 80 characters or fewer.");
+
+const password = z
+  .string()
+  .min(8, "Password must be at least 8 characters.")
+  .max(128, "Password must be 128 characters or fewer.");
+
+export const signupSchema = z
+  .object({
+    name,
+    email,
+    password,
+    isRenter: checkbox,
+    isLandlord: checkbox,
+    city: optionalText(80, "City"),
+  })
+  .refine((data) => data.isRenter || data.isLandlord, {
+    path: ["roles"],
+    message: "Choose at least one: renter, landlord, or both.",
+  });
+
+export const roleChangeSchema = z.object({
+  role: z.enum(["landlord", "renter"]),
+  change: z.enum(["add", "remove"]),
 });
 
 export const loginSchema = z.object({
@@ -41,7 +58,7 @@ export const loginSchema = z.object({
 });
 
 export const profileSchema = z.object({
-  name: signupSchema.shape.name,
+  name,
   city: optionalText(80, "City"),
   bio: optionalText(500, "Bio"),
 });
@@ -49,7 +66,7 @@ export const profileSchema = z.object({
 export const passwordChangeSchema = z
   .object({
     currentPassword: z.string().min(1, "Enter your current password.").max(128),
-    newPassword: signupSchema.shape.password,
+    newPassword: password,
     confirmPassword: z.string().max(128, "Password must be 128 characters or fewer."),
   })
   .refine((data) => data.newPassword === data.confirmPassword, {
@@ -97,10 +114,14 @@ export const propertySchema = z.object({
     .max(80, "State/region must be 80 characters or fewer."),
   postalCode: optionalText(20, "Postal code"),
   description: optionalText(300, "Description"),
+  // People who are both a landlord and a renter say which applies here.
+  relation: z.enum(["own", "rent"], { error: "Choose whether you own or rent this place." }).optional(),
+  // "" = not on GossipRent / not sure, "me" = the person adding it.
+  // Missing (undefined) means the form had no landlord field at all.
   landlordId: z
-    .union([z.literal(""), z.uuid("Choose a landlord from the list.")])
+    .union([z.literal(""), z.literal("me"), z.uuid("Choose a landlord from the list.")])
     .optional()
-    .transform((value) => value || null),
+    .transform((value) => (value === undefined ? undefined : value || null)),
 });
 
 export type FieldErrors = Partial<Record<string, string[]>>;

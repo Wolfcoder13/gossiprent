@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  boolean,
   check,
   index,
   pgEnum,
@@ -11,7 +12,14 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 
-export const userRole = pgEnum("user_role", ["landlord", "renter"]);
+export const USER_ROLES = ["landlord", "renter"] as const;
+
+/**
+ * @deprecated Replaced by users.isLandlord / users.isRenter. Kept (nullable,
+ * unused) for one release so a deployment still running the old code keeps
+ * working while the new one builds. Drop it in a later migration.
+ */
+export const legacyUserRole = pgEnum("user_role", USER_ROLES);
 
 /**
  * What a review is about:
@@ -33,7 +41,12 @@ export const users = pgTable(
     // Always stored lower-cased so the unique index is case-insensitive.
     email: text("email").notNull(),
     passwordHash: text("password_hash").notNull(),
-    role: userRole("role").notNull(),
+    // Someone can rent a home and also rent one out, so a person can be a
+    // landlord, a renter, or both. Reviews say which role they're about.
+    /** @deprecated See legacyUserRole. Not read or written by the app. */
+    legacyRole: legacyUserRole("role"),
+    isLandlord: boolean("is_landlord").notNull().default(false),
+    isRenter: boolean("is_renter").notNull().default(false),
     city: text("city"),
     bio: text("bio"),
     createdAt: timestamp("created_at", { withTimezone: true })
@@ -45,7 +58,9 @@ export const users = pgTable(
   },
   (t) => [
     uniqueIndex("users_email_unique").on(t.email),
-    index("users_role_idx").on(t.role),
+    index("users_is_landlord_idx").on(t.isLandlord).where(sql`${t.isLandlord}`),
+    index("users_is_renter_idx").on(t.isRenter).where(sql`${t.isRenter}`),
+    check("users_has_a_role", sql`${t.isLandlord} or ${t.isRenter}`),
   ],
 );
 
@@ -135,8 +150,10 @@ export const reviews = pgTable(
       sql`${t.subjectUserId} is null or ${t.subjectUserId} <> ${t.authorId}`,
     ),
     // One review per author per person / per property. Writing again edits it.
-    uniqueIndex("reviews_author_subject_user_unique")
-      .on(t.authorId, t.subjectUserId)
+    // Per kind, so someone who is both can be reviewed once as a landlord and
+    // once as a renter by the same person.
+    uniqueIndex("reviews_author_subject_user_kind_unique")
+      .on(t.authorId, t.subjectUserId, t.kind)
       .where(sql`${t.subjectUserId} is not null`),
     uniqueIndex("reviews_author_property_unique")
       .on(t.authorId, t.propertyId)
@@ -164,7 +181,7 @@ export const authAttempts = pgTable(
   (t) => [index("auth_attempts_key_created_at_idx").on(t.key, t.createdAt)],
 );
 
-export type UserRole = (typeof userRole.enumValues)[number];
+export type UserRole = (typeof USER_ROLES)[number];
 export type ReviewKind = (typeof reviewKind.enumValues)[number];
 export type User = typeof users.$inferSelect;
 export type Property = typeof properties.$inferSelect;

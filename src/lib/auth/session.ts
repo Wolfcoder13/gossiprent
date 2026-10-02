@@ -62,7 +62,8 @@ export type SessionUser = {
   id: string;
   name: string;
   email: string;
-  role: "landlord" | "renter";
+  isLandlord: boolean;
+  isRenter: boolean;
   city: string | null;
   bio: string | null;
   createdAt: Date;
@@ -80,7 +81,8 @@ export async function readSessionUser(): Promise<SessionUser | null> {
       id: users.id,
       name: users.name,
       email: users.email,
-      role: users.role,
+      isLandlord: users.isLandlord,
+      isRenter: users.isRenter,
       city: users.city,
       bio: users.bio,
       createdAt: users.createdAt,

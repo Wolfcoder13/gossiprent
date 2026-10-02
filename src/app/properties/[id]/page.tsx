@@ -47,8 +47,10 @@ export default async function PropertyPage({ params, searchParams }: PageProps<"
     hash: "reviews",
   });
   const isOwner = Boolean(viewer && property.landlord?.id === viewer.id);
-  const canClaim = viewer?.role === "landlord" && !property.landlord;
-  const mayReview = !isOwner && (!viewer || viewer.role === "renter");
+  // Landlords can't review their own properties, so someone who reviewed this
+  // one can't claim it either.
+  const canClaim = Boolean(viewer?.isLandlord) && !property.landlord && !myReview;
+  const mayReview = !isOwner && (!viewer || viewer.isRenter);
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-10 sm:px-6">
@@ -89,7 +91,7 @@ export default async function PropertyPage({ params, searchParams }: PageProps<"
                   The landlord for this property isn&apos;t on GossipRent yet.
                 </p>
               )}
-              {viewer?.role === "landlord" && (
+              {viewer?.isLandlord && (
                 <LandlordActions
                   propertyId={property.id}
                   mode={isOwner ? "unlink" : canClaim ? "claim" : null}
@@ -111,7 +113,7 @@ export default async function PropertyPage({ params, searchParams }: PageProps<"
             )}
           </Card>
 
-          <section aria-labelledby="reviews-heading" id="reviews" className="scroll-mt-36 sm:scroll-mt-24">
+          <section aria-labelledby="reviews-heading" id="reviews">
             <div className="mb-4">
               <ReviewsHeading id="reviews-heading" count={reviewPage.total} />
               <p className="text-sm text-muted">What renters say about living here.</p>

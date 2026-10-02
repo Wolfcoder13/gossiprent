@@ -28,9 +28,9 @@ export function Logo() {
 export function SiteHeader({ user }: { user: SessionUser | null }) {
   return (
     <header className="sticky top-0 z-30 border-b border-line bg-canvas/85 backdrop-blur">
-      <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-6 gap-y-2 px-4 py-3 sm:px-6">
+      <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3 sm:gap-x-6 sm:px-6">
         <Logo />
-        <nav aria-label="Main" className="order-last w-full overflow-x-auto sm:order-none sm:w-auto">
+        <nav aria-label="Main" className="order-last w-full sm:order-none sm:w-auto">
           <NavLinks />
         </nav>
         <div className="ml-auto flex items-center gap-2">
@@ -39,13 +39,16 @@ export function SiteHeader({ user }: { user: SessionUser | null }) {
               <Link
                 href="/dashboard"
                 aria-label="My account"
-                className="flex items-center gap-2 rounded-full py-1 pl-1 pr-3 text-sm font-medium text-ink hover:bg-surface-muted"
+                className="flex items-center gap-2 rounded-full p-1 text-sm font-medium text-ink hover:bg-surface-muted sm:pr-3"
               >
                 <Avatar name={user.name} id={user.id} size="sm" />
                 <span className="hidden sm:inline">My account</span>
               </Link>
               <form action={logout}>
-                <button type="submit" className={cx(buttonStyles.base, buttonStyles.ghost, "text-muted")}>
+                <button
+                  type="submit"
+                  className={cx(buttonStyles.base, buttonStyles.ghost, "px-3 text-muted sm:px-4")}
+                >
                   Log out
                 </button>
               </form>
@@ -71,7 +74,7 @@ export function SiteFooter() {
         <p>
           © {new Date().getFullYear()} GossipRent. Reviews are the opinions of their authors.
         </p>
-        <ul className="flex gap-4">
+        <ul className="flex flex-wrap gap-x-4 gap-y-2">
           <li>
             <Link href="/landlords" className="hover:text-ink">
               Landlords

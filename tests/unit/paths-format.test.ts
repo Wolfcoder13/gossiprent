@@ -13,9 +13,34 @@ describe("subjectPath", () => {
 });
 
 describe("profilePath", () => {
-  it("links a person to their public profile by role", () => {
-    expect(profilePath({ id: ID, role: "landlord" })).toBe(`/landlords/${ID}`);
-    expect(profilePath({ id: ID, role: "renter" })).toBe(`/renters/${ID}`);
+  const landlord = { id: ID, isLandlord: true, isRenter: false };
+  const renter = { id: ID, isLandlord: false, isRenter: true };
+  const both = { id: ID, isLandlord: true, isRenter: true };
+
+  it("links a person with one role to that role's page", () => {
+    expect(profilePath(landlord)).toBe(`/landlords/${ID}`);
+    expect(profilePath(renter)).toBe(`/renters/${ID}`);
+  });
+
+  it("links someone with both roles to their landlord page by default", () => {
+    expect(profilePath(both)).toBe(`/landlords/${ID}`);
+  });
+
+  it("uses the preferred role when the person has it", () => {
+    expect(profilePath(both, "renter")).toBe(`/renters/${ID}`);
+    expect(profilePath(both, "landlord")).toBe(`/landlords/${ID}`);
+    expect(profilePath(landlord, "landlord")).toBe(`/landlords/${ID}`);
+    expect(profilePath(renter, "renter")).toBe(`/renters/${ID}`);
+  });
+
+  it("falls back to the role they do have when they don't have the preferred one", () => {
+    expect(profilePath(landlord, "renter")).toBe(`/landlords/${ID}`);
+    expect(profilePath(renter, "landlord")).toBe(`/renters/${ID}`);
+  });
+
+  it("ignores extra fields (e.g. a review author's `role`)", () => {
+    const author = { id: ID, name: "Sam", role: "renter" as const, isLandlord: true, isRenter: true };
+    expect(profilePath(author, author.role)).toBe(`/renters/${ID}`);
   });
 });
 

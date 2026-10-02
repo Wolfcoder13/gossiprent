@@ -31,12 +31,14 @@ export const RATE_LIMITS = {
 } as const;
 
 /**
- * The visitor's IP address, or null if unknown. On Vercel these headers are
- * set by the platform and can't be spoofed by the client. Without a proxy that
- * sets them, IP-based limits are skipped rather than lumping every visitor
- * into one shared bucket.
+ * The visitor's IP address, or null if unknown. Vercel sets these headers
+ * itself, so clients can't fake them there. Anywhere else a client could send
+ * its own X-Forwarded-For, so they're only trusted when TRUST_PROXY_HEADERS=true
+ * (set it when you run behind a proxy that overwrites them). Without a
+ * trustworthy IP, the IP-based limits are skipped; per-account limits still apply.
  */
 export async function clientIp(): Promise<string | null> {
+  if (!process.env.VERCEL && process.env.TRUST_PROXY_HEADERS !== "true") return null;
   const h = await headers();
   return (
     h.get("x-real-ip")?.trim() ||

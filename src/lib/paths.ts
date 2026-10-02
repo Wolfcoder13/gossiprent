@@ -1,4 +1,5 @@
 import type { ReviewKind, UserRole } from "@/db/schema";
+import { hasRole, primaryRole, type HasRoles } from "./roles";
 
 /** URL of a landlord, renter, or property page. */
 export function subjectPath(kind: ReviewKind, id: string): string {
@@ -6,9 +7,13 @@ export function subjectPath(kind: ReviewKind, id: string): string {
   return `/${kind}s/${id}`;
 }
 
-/** URL of a person's public profile. */
-export function profilePath(user: { id: string; role: UserRole }): string {
-  return subjectPath(user.role, user.id);
+/**
+ * URL of a person's public profile: their landlord page or their renter page.
+ * Uses `prefer` when they have that role, otherwise the role they do have.
+ */
+export function profilePath(user: { id: string } & HasRoles, prefer?: UserRole): string {
+  const role = prefer && hasRole(user, prefer) ? prefer : primaryRole(user);
+  return subjectPath(role, user.id);
 }
 
 /** "/landlords?q=austin&page=2#reviews" — empty params and page 1 are left out. */

@@ -50,7 +50,7 @@ export default async function SearchPage({ searchParams }: PageProps<"/search">)
           <ResultGroup title="Landlords" total={landlords.total} moreHref={`/landlords?${q}`}>
             {landlords.items.map((p) => (
               <li key={p.id}>
-                <PersonCard person={p} />
+                <PersonCard person={p} role="landlord" />
               </li>
             ))}
           </ResultGroup>
@@ -64,7 +64,7 @@ export default async function SearchPage({ searchParams }: PageProps<"/search">)
           <ResultGroup title="Renters" total={renters.total} moreHref={`/renters?${q}`}>
             {renters.items.map((p) => (
               <li key={p.id}>
-                <PersonCard person={p} />
+                <PersonCard person={p} role="renter" />
               </li>
             ))}
           </ResultGroup>

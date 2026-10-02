@@ -1,4 +1,5 @@
-import { notFound } from "next/navigation";
+import Link from "next/link";
+import { notFound, redirect } from "next/navigation";
 import type { UserRole } from "@/db/schema";
 import { getCurrentUser } from "@/lib/auth/current-user";
 import {
@@ -8,17 +9,29 @@ import {
   listProperties,
   listReviewsAbout,
 } from "@/lib/data";
-import { formatMonthYear } from "@/lib/format";
+import { formatMonthYear, plural } from "@/lib/format";
+import { profilePath } from "@/lib/paths";
+import { hasRole, reviewerRole, rolesOf } from "@/lib/roles";
 import { CardGrid, PropertyCard } from "./cards";
 import { Pagination, redirectIfPastLastPage } from "./pagination";
 import { RatingSummary } from "./rating-summary";
 import { ReviewList } from "./review-card";
 import { ReviewPanel, ReviewsHeading } from "./review-panel";
+import { formatRating } from "./stars";
 import { Avatar, buttonStyles, Card, cx, EmptyState, RoleBadge } from "./ui";
 
 const PROPERTIES_SHOWN = 60;
 
-/** Public profile page for a landlord or a renter. */
+const ROLE_TAB_LABEL: Record<UserRole, string> = {
+  landlord: "As a landlord",
+  renter: "As a renter",
+};
+
+/**
+ * Public profile page for a person in one role. Someone who is both a
+ * landlord and a renter has two pages (/landlords/:id and /renters/:id), each
+ * with its own rating, linked by tabs.
+ */
 export async function PersonProfile({
   id,
   role,
@@ -28,18 +41,24 @@ export async function PersonProfile({
   role: UserRole;
   page: number;
 }) {
-  const person = await getPublicUser(id, role);
+  const person = await getPublicUser(id);
   if (!person) notFound();
+  // e.g. /renters/:id for someone who is only a landlord: go to their page.
+  if (!hasRole(person, role)) redirect(profilePath(person));
 
+  const roles = rolesOf(person);
+  const otherRole = roles.find((r) => r !== role);
   const viewer = await getCurrentUser();
-  const [summary, reviewPage, myReview, managed] = await Promise.all([
-    getRatingSummary({ userId: id }),
-    listReviewsAbout({ userId: id }, page),
-    viewer ? getReviewByAuthor(viewer.id, { userId: id }) : null,
+  const [summary, otherSummary, reviewPage, myReview, managed] = await Promise.all([
+    getRatingSummary({ userId: id, as: role }),
+    otherRole ? getRatingSummary({ userId: id, as: otherRole }) : null,
+    listReviewsAbout({ userId: id, as: role }, page),
+    viewer ? getReviewByAuthor(viewer.id, { userId: id, as: role }) : null,
     role === "landlord"
       ? listProperties({ landlordId: id, sort: "name", pageSize: PROPERTIES_SHOWN })
       : null,
   ]);
+  const summaries = { [role]: summary, ...(otherRole ? { [otherRole]: otherSummary! } : {}) };
   const path = `/${role}s/${id}`;
   redirectIfPastLastPage({
     page,
@@ -51,7 +70,7 @@ export async function PersonProfile({
   const isSelf = viewer?.id === id;
   const reviewerNoun = role === "landlord" ? "renters" : "landlords";
   // Renters review landlords and landlords review renters.
-  const mayReview = !isSelf && (!viewer || viewer.role !== role);
+  const mayReview = !isSelf && (!viewer || hasRole(viewer, reviewerRole(role)));
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-10 sm:px-6">
@@ -65,7 +84,9 @@ export async function PersonProfile({
                   <h1 className="min-w-0 text-2xl font-bold tracking-tight wrap-anywhere text-ink sm:text-3xl">
                     {person.name}
                   </h1>
-                  <RoleBadge role={person.role} />
+                  {roles.map((r) => (
+                    <RoleBadge key={r} role={r} />
+                  ))}
                   {person.deletedAt && (
                     <span className="rounded-full bg-surface-muted px-2.5 py-0.5 text-xs font-semibold text-muted">
                       Account closed
@@ -86,14 +107,56 @@ export async function PersonProfile({
                 )}
               </div>
             </div>
-            <div className="mt-6 border-t border-line pt-6">
+            {otherRole && (
+              <nav aria-label="Ratings by role" className="mt-6 flex flex-wrap gap-2">
+                {roles.map((r) => {
+                  const s = summaries[r]!;
+                  return (
+                    <Link
+                      key={r}
+                      href={`/${r}s/${id}`}
+                      aria-current={r === role ? "page" : undefined}
+                      className={cx(
+                        "rounded-full border px-3.5 py-1.5 text-sm font-medium transition-colors",
+                        r === role
+                          ? "border-brand bg-brand-soft text-brand-soft-ink"
+                          : "border-line-strong text-muted hover:bg-surface-muted hover:text-ink",
+                      )}
+                    >
+                      {ROLE_TAB_LABEL[r]}{" "}
+                      <span className="text-xs">
+                        {s.count > 0 ? (
+                          <>
+                            ({formatRating(s.average)}
+                            <span aria-hidden>★</span>
+                            <span className="sr-only"> stars</span>, {plural(s.count, "review")})
+                          </>
+                        ) : (
+                          "(no reviews)"
+                        )}
+                      </span>
+                    </Link>
+                  );
+                })}
+              </nav>
+            )}
+            <div className={cx("border-t border-line pt-6", otherRole ? "mt-4" : "mt-6")}>
+              {otherRole && (
+                <h2 className="mb-4 text-sm font-semibold text-muted">
+                  {person.name}&apos;s rating {ROLE_TAB_LABEL[role].toLowerCase()}
+                </h2>
+              )}
               <RatingSummary summary={summary} />
             </div>
             {mayReview && (
               // A plain anchor (not next/link) so keyboard focus moves to the form too.
               <a
                 href="#your-review"
-                className={cx(buttonStyles.base, buttonStyles.primary, "mt-6 w-full wrap-anywhere lg:hidden")}
+                className={cx(
+                  buttonStyles.base,
+                  buttonStyles.primary,
+                  "mt-6 w-full rounded-2xl text-center wrap-anywhere lg:hidden",
+                )}
               >
                 {myReview ? "Edit your review" : `Review ${person.name}`}
               </a>
@@ -126,9 +189,13 @@ export async function PersonProfile({
             </section>
           )}
 
-          <section aria-labelledby="reviews-heading" id="reviews" className="scroll-mt-36 sm:scroll-mt-24">
+          <section aria-labelledby="reviews-heading" id="reviews">
             <div className="mb-4">
-              <ReviewsHeading id="reviews-heading" count={reviewPage.total} />
+              <ReviewsHeading
+                id="reviews-heading"
+                count={reviewPage.total}
+                label={otherRole ? `Reviews as a ${role}` : undefined}
+              />
               <p className="text-sm text-muted">What {reviewerNoun} say about {person.name}.</p>
             </div>
             {reviewPage.items.length > 0 ? (

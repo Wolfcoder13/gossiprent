@@ -5,6 +5,7 @@ export {
   DatabaseNotConfiguredError,
   getDatabaseMode,
   type Database,
+  type Transaction,
 } from "./connect";
 
 // Kept on globalThis so dev-mode hot reloads reuse one pool / one embedded

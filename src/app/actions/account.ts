@@ -1,6 +1,6 @@
 "use server";
 
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getDb } from "@/db";
@@ -14,6 +14,8 @@ import {
   parseForm,
   passwordChangeSchema,
   profileSchema,
+  roleChangeSchema,
+  safeRedirectPath,
   type FormState,
 } from "@/lib/validation";
 
@@ -34,6 +36,70 @@ export async function updateProfile(_prev: FormState, formData: FormData): Promi
     status: "success",
     message: "Profile saved.",
     values: { name, city: city ?? "", bio: bio ?? "" },
+  };
+}
+
+/**
+ * Add a role ("I'm also a landlord") or remove one. A role can only be removed
+ * while you keep the other one and nobody has reviewed you in it, so dropping
+ * a role can't hide reviews. Removing "landlord" unlinks your properties.
+ */
+export async function changeRole(_prev: FormState, formData: FormData): Promise<FormState> {
+  const user = await getCurrentUser();
+  if (!user) return { status: "error", message: "Please log in again." };
+  const parsed = roleChangeSchema.safeParse({
+    role: formData.get("role"),
+    change: formData.get("change"),
+  });
+  if (!parsed.success) return { status: "error", message: "Something went wrong. Please try again." };
+  const { role, change } = parsed.data;
+  const flag = role === "landlord" ? "isLandlord" : "isRenter";
+  const label = role === "landlord" ? "landlord" : "renter";
+
+  const db = await getDb();
+  if (change === "add") {
+    await db.update(users).set({ [flag]: true }).where(eq(users.id, user.id));
+  } else {
+    // One transaction holding a lock on the user row, so a review (which
+    // share-locks its subject) or a property claim can't land in between the
+    // checks and the removal.
+    const refusal = await db.transaction(async (tx) => {
+      const [me] = await tx
+        .select({ isLandlord: users.isLandlord, isRenter: users.isRenter })
+        .from(users)
+        .where(eq(users.id, user.id))
+        // Blocks the FOR SHARE locks taken by reviews, claims and new listings,
+        // but not foreign-key checks (which would risk deadlocks).
+        .for("no key update");
+      if (!me) return "Please log in again.";
+      if (!(role === "landlord" ? me.isRenter : me.isLandlord)) {
+        return "You need at least one role. Add the other one first.";
+      }
+      const [reviewed] = await tx
+        .select({ id: reviews.id })
+        .from(reviews)
+        .where(and(eq(reviews.subjectUserId, user.id), eq(reviews.kind, role)))
+        .limit(1);
+      if (reviewed) return `People have reviewed you as a ${label}, so you can't remove that role.`;
+      if (role === "landlord") {
+        await tx.update(properties).set({ landlordId: null }).where(eq(properties.landlordId, user.id));
+      }
+      await tx.update(users).set({ [flag]: false }).where(eq(users.id, user.id));
+      return null;
+    });
+    if (refusal) return { status: "error", message: refusal };
+  }
+
+  revalidatePath("/", "layout");
+  const next = safeRedirectPath(formData.get("next"), "");
+  return {
+    status: "success",
+    message:
+      change === "add"
+        ? `Done. You're now listed as a ${label} too.`
+        : `Done. You're no longer listed as a ${label}.`,
+    // Came here from a review form? Offer the way back.
+    link: change === "add" && next ? { href: next, label: "Back to write your review" } : undefined,
   };
 }
 
@@ -103,14 +169,17 @@ export async function deleteAccount(formData: FormData): Promise<void> {
   const db = await getDb();
   await deleteSession();
   await db.transaction(async (tx) => {
+    // Lock the row so a review about them can't arrive mid-way.
+    await tx.select({ id: users.id }).from(users).where(eq(users.id, user.id)).for("update");
     await tx.delete(reviews).where(eq(reviews.authorId, user.id));
-    const [reviewedBySomeone] = await tx
-      .select({ id: reviews.id })
-      .from(reviews)
-      .where(eq(reviews.subjectUserId, user.id))
-      .limit(1);
+    const reviewedAs = (
+      await tx
+        .selectDistinct({ kind: reviews.kind })
+        .from(reviews)
+        .where(eq(reviews.subjectUserId, user.id))
+    ).map((row) => row.kind);
 
-    if (!reviewedBySomeone) {
+    if (reviewedAs.length === 0) {
       await tx.delete(users).where(eq(users.id, user.id));
       return;
     }
@@ -126,6 +195,9 @@ export async function deleteAccount(formData: FormData): Promise<void> {
         passwordHash: "deleted",
         bio: null,
         deletedAt: new Date(),
+        // Keep only the roles they were reviewed in; the rest has nothing to show.
+        isLandlord: reviewedAs.includes("landlord"),
+        isRenter: reviewedAs.includes("renter"),
       })
       .where(eq(users.id, user.id));
   });

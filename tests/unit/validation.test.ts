@@ -9,7 +9,7 @@ import {
   profileSchema,
   propertySchema,
   reviewSchema,
-  roleSchema,
+  roleChangeSchema,
   safeRedirectPath,
   signupSchema,
   stripNul,
@@ -29,12 +29,12 @@ describe("signupSchema", () => {
     name: "Jordan Ellis",
     email: "jordan@example.com",
     password: "password123",
-    role: "renter",
+    isRenter: "on",
     city: "Austin, TX",
   };
 
-  it("accepts a valid signup", () => {
-    expect(signupSchema.parse(valid)).toEqual(valid);
+  it("accepts a valid signup, turning the ticked checkboxes into booleans", () => {
+    expect(signupSchema.parse(valid)).toEqual({ ...valid, isRenter: true, isLandlord: false });
   });
 
   it("trims the name and city, and trims + lowercases the email", () => {
@@ -62,19 +62,35 @@ describe("signupSchema", () => {
     expect(signupSchema.parse({ ...valid, city }).city).toBeNull();
   });
 
-  it("accepts both roles", () => {
-    expect(signupSchema.parse({ ...valid, role: "landlord" }).role).toBe("landlord");
-    expect(roleSchema.parse("renter")).toBe("renter");
+  it.each([
+    ["renter only", { isRenter: "on" }, { isRenter: true, isLandlord: false }],
+    ["landlord only", { isLandlord: "on" }, { isRenter: false, isLandlord: true }],
+    ["both", { isRenter: "on", isLandlord: "on" }, { isRenter: true, isLandlord: true }],
+    // `value="true"` (e.g. a hidden input or a script) counts as ticked too.
+    ["both, sent as true", { isRenter: "true", isLandlord: "true" }, { isRenter: true, isLandlord: true }],
+  ])("accepts %s", (_label, roles, expected) => {
+    const rest: Partial<typeof valid> = { ...valid };
+    delete rest.isRenter;
+    expect(signupSchema.parse({ ...rest, ...roles })).toMatchObject(expected);
   });
 
-  it.each([["admin"], [""], [undefined], ["Landlord"]])(
-    "rejects role %j with a friendly message",
-    (role) => {
-      expect(fieldErrors(signupSchema, { ...valid, role }).role).toEqual([
-        "Choose whether you're a landlord or a renter.",
-      ]);
-    },
-  );
+  it.each([
+    ["no role at all", {}],
+    ["empty values", { isRenter: "", isLandlord: "" }],
+    ["unticked-looking values", { isRenter: "off", isLandlord: "false" }],
+    ["other strings", { isRenter: "yes", isLandlord: "1" }],
+    ["a different casing", { isRenter: "ON", isLandlord: "True" }],
+    ["the old single-role field", { role: "renter" }],
+  ])("asks for at least one role when given %s", (_label, roles) => {
+    const rest: Partial<typeof valid> = { ...valid };
+    delete rest.isRenter;
+    const errors = fieldErrors(signupSchema, { ...rest, ...roles });
+    expect(errors).toEqual({ roles: ["Choose at least one: renter, landlord, or both."] });
+  });
+
+  it("rejects a non-string checkbox value (a tampered request)", () => {
+    expect(signupSchema.safeParse({ ...valid, isLandlord: ["on"] }).success).toBe(false);
+  });
 
   it("requires a name of 2–80 characters after trimming", () => {
     expect(fieldErrors(signupSchema, { ...valid, name: "  J  " }).name).toEqual([
@@ -119,9 +135,31 @@ describe("signupSchema", () => {
     ]);
   });
 
-  it("reports every invalid field at once", () => {
-    const errors = fieldErrors(signupSchema, { name: "J", email: "nope", password: "1", role: "x" });
-    expect(Object.keys(errors).sort()).toEqual(["email", "name", "password", "role"]);
+  it("reports every invalid field at once, including a missing role", () => {
+    const errors = fieldErrors(signupSchema, { name: "J", email: "nope", password: "1" });
+    expect(Object.keys(errors).sort()).toEqual(["email", "name", "password", "roles"]);
+  });
+});
+
+describe("roleChangeSchema", () => {
+  it.each([
+    ["landlord", "add"],
+    ["landlord", "remove"],
+    ["renter", "add"],
+    ["renter", "remove"],
+  ])("accepts %s / %s", (role, change) => {
+    expect(roleChangeSchema.parse({ role, change })).toEqual({ role, change });
+  });
+
+  it.each([
+    [{ role: "admin", change: "add" }],
+    [{ role: "renter", change: "toggle" }],
+    [{ role: "", change: "add" }],
+    [{ role: "Landlord", change: "add" }],
+    [{ change: "add" }],
+    [{ role: "renter" }],
+  ])("rejects %j", (input) => {
+    expect(roleChangeSchema.safeParse(input).success).toBe(false);
   });
 });
 
@@ -285,8 +323,11 @@ describe("propertySchema", () => {
       region: "TX",
       postalCode: "78702",
       description: "Bakery below.",
-      landlordId: null,
     });
+    // No landlord field at all stays undefined (the form had no picker)...
+    expect(data.landlordId).toBeUndefined();
+    // ...while a blank picker means "not on GossipRent / not sure".
+    expect(propertySchema.parse({ ...valid, landlordId: "" }).landlordId).toBeNull();
   });
 
   it("turns blank or missing optional fields into null", () => {
@@ -336,6 +377,30 @@ describe("propertySchema", () => {
       "Choose a landlord from the list.",
     ]);
   });
+
+  it('accepts "me" (the person adding it manages it) as the landlord', () => {
+    expect(propertySchema.parse({ ...valid, landlordId: "me" }).landlordId).toBe("me");
+  });
+
+  it.each([["Me"], ["ME"], [" me"], ["myself"], ["self"]])("rejects landlord %j", (landlordId) => {
+    expect(fieldErrors(propertySchema, { ...valid, landlordId }).landlordId).toEqual([
+      "Choose a landlord from the list.",
+    ]);
+  });
+
+  it.each([["own"], ["rent"]])('accepts relation "%s" (own or rent the place)', (relation) => {
+    expect(propertySchema.parse({ ...valid, relation }).relation).toBe(relation);
+  });
+
+  it("relation is optional (only people with both roles are asked)", () => {
+    expect(propertySchema.parse(valid).relation).toBeUndefined();
+  });
+
+  it.each([["Own"], ["manage"], [""], ["landlord"]])("rejects relation %j with a readable message", (relation) => {
+    expect(fieldErrors(propertySchema, { ...valid, relation }).relation).toEqual([
+      "Choose whether you own or rent this place.",
+    ]);
+  });
 });
 
 describe("formValues", () => {
@@ -375,7 +440,7 @@ describe("parseForm", () => {
     form.set("name", "J");
     form.set("email", "bad");
     form.set("password", "short");
-    form.set("role", "renter");
+    form.set("isRenter", "on");
     form.set("city", "Austin");
     const result = parseForm(signupSchema, form);
     expect(result.success).toBe(false);
@@ -387,7 +452,7 @@ describe("parseForm", () => {
       email: ["Enter a valid email address."],
       password: ["Password must be at least 8 characters."],
     });
-    expect(result.state.values).toEqual({ name: "J", email: "bad", role: "renter", city: "Austin" });
+    expect(result.state.values).toEqual({ name: "J", email: "bad", isRenter: "on", city: "Austin" });
   });
 
   it("echoes the chosen star rating so the form can re-select it", () => {

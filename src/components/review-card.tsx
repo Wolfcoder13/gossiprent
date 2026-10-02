@@ -38,7 +38,7 @@ export function ReviewCard({
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <Link
-                href={profilePath(review.author)}
+                href={profilePath(review.author, review.author.role)}
                 className="truncate font-semibold text-ink hover:underline"
               >
                 {review.author.name}

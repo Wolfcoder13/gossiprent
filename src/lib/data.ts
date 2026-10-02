@@ -7,12 +7,15 @@ import {
   eq,
   ilike,
   isNull,
+  ne,
+  or,
   sql,
   type SQL,
 } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { cache } from "react";
 import { getDb } from "@/db";
+import { reviewerRole } from "@/lib/roles";
 import {
   properties,
   reviews,
@@ -32,7 +35,8 @@ export const REVIEWS_PAGE_SIZE = 10;
 export type PublicUser = {
   id: string;
   name: string;
-  role: UserRole;
+  isLandlord: boolean;
+  isRenter: boolean;
   city: string | null;
   bio: string | null;
   createdAt: Date;
@@ -83,7 +87,8 @@ export type ReviewItem = {
   body: string;
   createdAt: Date;
   updatedAt: Date;
-  author: { id: string; name: string; role: UserRole };
+  /** `role` is the role they wrote this review in (a renter, for a landlord review). */
+  author: { id: string; name: string; role: UserRole; isLandlord: boolean; isRenter: boolean };
   subject: ReviewSubject;
 };
 
@@ -94,8 +99,13 @@ export type Paginated<T> = {
   pageCount: number;
 };
 
-/** Who/what a set of reviews is about. */
-export type ReviewTarget = { userId: string } | { propertyId: string };
+/**
+ * Who/what a set of reviews is about. For a person, `as` says which role:
+ * someone who's both a landlord and a renter has separate ratings for each.
+ */
+export type ReviewTarget = { userId: string; as: UserRole } | { propertyId: string };
+
+const roleColumn = (role: UserRole) => (role === "landlord" ? users.isLandlord : users.isRenter);
 
 export type PersonSort = "top" | "most" | "newest" | "name";
 export type PropertySort = PersonSort;
@@ -132,8 +142,10 @@ export function parseSort(value: string | string[] | undefined): PersonSort {
 export function parseQuery(value: string | string[] | undefined): string {
   const raw = Array.isArray(value) ? value[0] : value;
   // Postgres rejects NUL characters in text, so drop them rather than erroring.
-  // toWellFormed() repairs an emoji cut in half by the length limit.
-  const query = raw?.replaceAll("\u0000", "").trim().slice(0, 100).toWellFormed().trim() ?? "";
+  // Cut by code points (not UTF-16 units) so an emoji is never split in half,
+  // and drop any lone surrogates the raw input already had.
+  const cleaned = raw?.replaceAll("\u0000", "").toWellFormed().replaceAll("\uFFFD", "").trim() ?? "";
+  const query = Array.from(cleaned).slice(0, 100).join("").trim();
   // A query with no words (e.g. just ",") would otherwise match everything.
   return searchPatterns(query).length > 0 ? query : "";
 }
@@ -162,7 +174,8 @@ const averageRating = sql<number | null>`round(avg(${reviews.rating}), 2)`.mapWi
 const publicUserColumns = {
   id: users.id,
   name: users.name,
-  role: users.role,
+  isLandlord: users.isLandlord,
+  isRenter: users.isRenter,
   city: users.city,
   bio: users.bio,
   createdAt: users.createdAt,
@@ -171,7 +184,7 @@ const publicUserColumns = {
 
 function targetCondition(target: ReviewTarget): SQL {
   return "userId" in target
-    ? eq(reviews.subjectUserId, target.userId)
+    ? and(eq(reviews.subjectUserId, target.userId), eq(reviews.kind, target.as))!
     : eq(reviews.propertyId, target.propertyId);
 }
 
@@ -192,7 +205,7 @@ export const getPublicUser = cache(
     const [user] = await db
       .select(publicUserColumns)
       .from(users)
-      .where(role ? and(eq(users.id, id), eq(users.role, role)) : eq(users.id, id))
+      .where(role ? and(eq(users.id, id), eq(roleColumn(role), true)) : eq(users.id, id))
       .limit(1);
     return user ?? null;
   },
@@ -210,7 +223,7 @@ export async function listPeople(options: {
 
   const personText = sql`concat_ws(' ', ${users.name}, ${users.city})`;
   const where = and(
-    eq(users.role, role),
+    eq(roleColumn(role), true),
     ...searchPatterns(query).map((pattern) => ilike(personText, pattern)),
   );
 
@@ -233,7 +246,8 @@ export async function listPeople(options: {
         )`.mapWith(Number),
       })
       .from(users)
-      .leftJoin(reviews, eq(reviews.subjectUserId, users.id))
+      // Only the reviews about them in this role.
+      .leftJoin(reviews, and(eq(reviews.subjectUserId, users.id), eq(reviews.kind, role)))
       .where(where)
       .groupBy(users.id)
       .orderBy(...orderBy, asc(users.id))
@@ -258,8 +272,18 @@ export async function listProperties(options: {
   pageSize?: number;
   landlordId?: string;
   createdById?: string;
+  /** Leave out properties this landlord manages. */
+  notLandlordId?: string;
 }): Promise<Paginated<PropertyListItem>> {
-  const { query, sort = "top", page = 1, pageSize = PAGE_SIZE, landlordId, createdById } = options;
+  const {
+    query,
+    sort = "top",
+    page = 1,
+    pageSize = PAGE_SIZE,
+    landlordId,
+    createdById,
+    notLandlordId,
+  } = options;
   const db = await getDb();
 
   // Everything a renter might type: "1408 E 6th St, Unit 2B, Austin TX 78702", or the landlord.
@@ -268,6 +292,9 @@ export async function listProperties(options: {
   const where = and(
     landlordId ? eq(properties.landlordId, landlordId) : undefined,
     createdById ? eq(properties.createdById, createdById) : undefined,
+    notLandlordId
+      ? or(isNull(properties.landlordId), ne(properties.landlordId, notLandlordId))
+      : undefined,
     ...searchPatterns(query).map((pattern) => ilike(propertyText, pattern)),
   );
 
@@ -378,7 +405,7 @@ export async function listLandlordOptions(): Promise<
   return db
     .select({ id: users.id, name: users.name, city: users.city })
     .from(users)
-    .where(and(eq(users.role, "landlord"), isNull(users.deletedAt)))
+    .where(and(eq(users.isLandlord, true), isNull(users.deletedAt)))
     .orderBy(sql`lower(${users.name})`, asc(users.name))
     .limit(1000);
 }
@@ -407,7 +434,8 @@ async function queryReviews(options: {
       updatedAt: reviews.updatedAt,
       authorId: author.id,
       authorName: author.name,
-      authorRole: author.role,
+      authorIsLandlord: author.isLandlord,
+      authorIsRenter: author.isRenter,
       subjectUserId: subjectUser.id,
       subjectUserName: subjectUser.name,
       propertyId: properties.id,
@@ -432,7 +460,13 @@ async function queryReviews(options: {
     body: row.body,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
-    author: { id: row.authorId, name: row.authorName, role: row.authorRole },
+    author: {
+      id: row.authorId,
+      name: row.authorName,
+      role: reviewerRole(row.kind),
+      isLandlord: row.authorIsLandlord,
+      isRenter: row.authorIsRenter,
+    },
     subject:
       row.kind === "property"
         ? {
@@ -540,14 +574,19 @@ export async function getSiteStats(): Promise<{
   reviews: number;
 }> {
   const db = await getDb();
-  const [roleCounts, [propertyCount], [reviewCount]] = await Promise.all([
-    db.select({ role: users.role, count: count() }).from(users).groupBy(users.role),
+  const [[roleCounts], [propertyCount], [reviewCount]] = await Promise.all([
+    db
+      .select({
+        landlords: count(sql`case when ${users.isLandlord} then 1 end`),
+        renters: count(sql`case when ${users.isRenter} then 1 end`),
+      })
+      .from(users),
     db.select({ count: count() }).from(properties),
     db.select({ count: count() }).from(reviews),
   ]);
   return {
-    landlords: roleCounts.find((r) => r.role === "landlord")?.count ?? 0,
-    renters: roleCounts.find((r) => r.role === "renter")?.count ?? 0,
+    landlords: roleCounts.landlords,
+    renters: roleCounts.renters,
     properties: propertyCount.count,
     reviews: reviewCount.count,
   };

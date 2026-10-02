@@ -10,6 +10,7 @@ import {
   logOut,
   makeUser,
   myProfilePath,
+  roleCheckbox,
   signUp,
   uid,
 } from "./helpers";
@@ -29,7 +30,7 @@ test.describe("sign up", () => {
     await expect(page.getByRole("link", { name: "Review a property" })).toHaveAttribute("href", "/properties");
     await expect(page.getByRole("link", { name: "Add the place you rent" })).toHaveAttribute("href", "/properties/new");
     await expect(page.getByRole("heading", { name: "Reviews about you (0)" })).toBeVisible();
-    await expect(page.getByText("No one has reviewed you yet")).toBeVisible();
+    await expect(page.getByText("No landlords have reviewed you yet")).toBeVisible();
     await expect(page.getByRole("heading", { name: "Reviews you've written (0)" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Properties you added (0)" })).toBeVisible();
     await expect(page.getByRole("heading", { name: /Reviews of your properties/ })).toHaveCount(0);
@@ -76,31 +77,52 @@ test.describe("sign up", () => {
     await expect(page.getByRole("link", { name: new RegExp(user.name) })).toContainText("Location not listed");
   });
 
-  test("?role= preselects the account type", async ({ page }) => {
+  test("?role= preselects one role; the other can still be ticked too", async ({ page }) => {
     await page.goto("/signup?role=landlord");
-    await expect(page.getByRole("radio", { name: "I'm a landlord" })).toBeChecked();
-    await expect(page.getByRole("radio", { name: "I'm a renter" })).not.toBeChecked();
+    await expect(roleCheckbox(page, "landlord")).toBeChecked();
+    await expect(roleCheckbox(page, "renter")).not.toBeChecked();
+    // They're checkboxes, not radios: ticking one keeps the other.
+    await expect(page.getByRole("radio")).toHaveCount(0);
+    await roleCheckbox(page, "renter").check();
+    await expect(roleCheckbox(page, "landlord")).toBeChecked();
+    await expect(roleCheckbox(page, "renter")).toBeChecked();
 
     await page.goto("/signup?role=renter");
-    await expect(page.getByRole("radio", { name: "I'm a renter" })).toBeChecked();
+    await expect(roleCheckbox(page, "renter")).toBeChecked();
+    await expect(roleCheckbox(page, "landlord")).not.toBeChecked();
 
-    await page.goto("/signup?role=admin");
-    await expect(page.getByRole("radio", { name: "I'm a renter" })).not.toBeChecked();
-    await expect(page.getByRole("radio", { name: "I'm a landlord" })).not.toBeChecked();
+    for (const role of ["admin", "both", ""]) {
+      await page.goto(`/signup?role=${role}`);
+      await expect(roleCheckbox(page, "renter"), role).not.toBeChecked();
+      await expect(roleCheckbox(page, "landlord"), role).not.toBeChecked();
+    }
   });
 
   test("shows every validation error and keeps what was typed (except the password)", async ({ page }) => {
     await page.goto("/signup");
     await page.getByRole("button", { name: "Create account" }).click();
     await expect(formAlert(page)).toHaveText("Please fix the highlighted fields.");
-    await expect(page.getByText("Choose whether you're a landlord or a renter.")).toBeVisible();
+    await expect(page.getByText("Choose at least one: renter, landlord, or both.")).toBeVisible();
+    // Each checkbox is marked invalid and described by the error (aria-invalid
+    // isn't allowed on a fieldset/group).
+    const roles = page.getByRole("group", { name: "I'm joining as a…" });
+    await expect(roles).not.toHaveAttribute("aria-invalid");
+    for (const role of ["renter", "landlord"] as const) {
+      await expect(roleCheckbox(page, role), role).toHaveAttribute("aria-invalid", "true");
+      await expect(roleCheckbox(page, role), role).toHaveAccessibleDescription(
+        "Choose at least one: renter, landlord, or both.",
+      );
+    }
+    // ...and the cards get the error colour.
+    const renterCard = page.locator("label").filter({ has: roleCheckbox(page, "renter") });
+    const errorBorder = await renterCard.evaluate((el) => getComputedStyle(el).borderTopColor);
     await expect(page.getByText("Name must be at least 2 characters.")).toBeVisible();
     await expect(page.getByText("Enter a valid email address.")).toBeVisible();
     await expect(page.getByText("Password must be at least 8 characters.")).toBeVisible();
     await expect(page).toHaveURL(/\/signup$/);
 
     // Fix some fields but not others.
-    await page.locator("label", { hasText: "I'm a landlord" }).click();
+    await roleCheckbox(page, "landlord").check();
     await page.getByLabel("Name", { exact: true }).fill("Al Bundy");
     await page.getByLabel("Email").fill("not-an-email");
     await page.getByLabel("Password").fill("short");
@@ -110,12 +132,19 @@ test.describe("sign up", () => {
     await expect(page.getByText("Enter a valid email address.")).toBeVisible();
     await expect(page.getByText("Password must be at least 8 characters.")).toBeVisible();
     await expect(page.getByText("Name must be at least 2 characters.")).toHaveCount(0);
-    await expect(page.getByText("Choose whether you're a landlord or a renter.")).toHaveCount(0);
+    await expect(page.getByText("Choose at least one: renter, landlord, or both.")).toHaveCount(0);
+    for (const role of ["renter", "landlord"] as const) {
+      await expect(roleCheckbox(page, role), role).not.toHaveAttribute("aria-invalid");
+      await expect(roleCheckbox(page, role), role).not.toHaveAttribute("aria-describedby");
+    }
+    // The (still unticked) renter card is back to its normal border.
+    expect(await renterCard.evaluate((el) => getComputedStyle(el).borderTopColor)).not.toBe(errorBorder);
     await expect(page.getByLabel("Name", { exact: true })).toHaveValue("Al Bundy");
     await expect(page.getByLabel("Email")).toHaveValue("not-an-email");
     await expect(page.getByLabel("City")).toHaveValue("Chicago, IL");
     await expect(page.getByLabel("Password")).toHaveValue("");
-    await expect(page.getByRole("radio", { name: "I'm a landlord" })).toBeChecked();
+    await expect(roleCheckbox(page, "landlord")).toBeChecked();
+    await expect(roleCheckbox(page, "renter")).not.toBeChecked();
     // Errors are wired up for screen readers.
     await expect(page.getByLabel("Email")).toHaveAttribute("aria-invalid", "true");
     await expect(page.getByLabel("Email")).toHaveAccessibleDescription("Enter a valid email address.");
@@ -134,7 +163,8 @@ test.describe("sign up", () => {
     ).toBeVisible();
     await expect(page).toHaveURL(/\/signup$/);
     await expect(page.getByLabel("Name", { exact: true })).toHaveValue("Copycat Maria");
-    await expect(page.getByRole("radio", { name: "I'm a renter" })).toBeChecked();
+    await expect(roleCheckbox(page, "renter")).toBeChecked();
+    await expect(roleCheckbox(page, "landlord")).not.toBeChecked();
   });
 
   test("stores the email in lower case so you can log in with any casing", async ({ page }) => {
@@ -268,7 +298,8 @@ test.describe("redirects through login", () => {
     await page.goto(path);
     await page.getByRole("link", { name: "Sign up as a renter" }).click();
     await expect(page).toHaveURL(`/signup?role=renter&next=${encodeURIComponent(path)}`);
-    await expect(page.getByRole("radio", { name: "I'm a renter" })).toBeChecked();
+    await expect(roleCheckbox(page, "renter")).toBeChecked();
+    await expect(roleCheckbox(page, "landlord")).not.toBeChecked();
 
     // The "Log in" link on the sign-up page keeps the return path too.
     await expect(page.locator("main").getByRole("link", { name: "Log in" })).toHaveAttribute(
@@ -573,7 +604,7 @@ test.describe("signing out other devices", () => {
     const other = await browser.newContext();
     const otherPage = await other.newPage();
     await page.goto("/signup");
-    await page.locator("label", { hasText: "I'm a renter" }).click();
+    await roleCheckbox(page, "renter").check();
     await page.getByLabel("Name", { exact: true }).fill(user.name);
     await page.getByLabel("Email").fill(user.email);
     await page.getByLabel("Password").fill(user.password);

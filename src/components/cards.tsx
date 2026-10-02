@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
+import type { UserRole } from "@/db/schema";
 import type { PersonListItem, PropertyListItem } from "@/lib/data";
 import { propertyLabel } from "@/lib/data";
 import { plural } from "@/lib/format";
@@ -10,9 +11,11 @@ import { Avatar, RoleBadge } from "./ui";
 const cardClass =
   "group flex h-full flex-col rounded-2xl border border-line bg-surface p-5 shadow-sm transition hover:-translate-y-0.5 hover:border-line-strong hover:shadow-md";
 
-export function PersonCard({ person }: { person: PersonListItem }) {
+/** A person in one of their roles: the card shows their rating *as* that role. */
+export function PersonCard({ person, role }: { person: PersonListItem; role: UserRole }) {
+  const alsoOther = role === "landlord" ? person.isRenter : person.isLandlord;
   return (
-    <Link href={subjectPath(person.role, person.id)} className={cardClass}>
+    <Link href={subjectPath(role, person.id)} className={cardClass}>
       <div className="flex items-center gap-3">
         <Avatar name={person.name} id={person.id} />
         <div className="min-w-0">
@@ -24,12 +27,21 @@ export function PersonCard({ person }: { person: PersonListItem }) {
         <RatingInline average={person.average} count={person.reviewCount} />
       </div>
       {person.bio && <p className="mt-3 line-clamp-2 text-sm text-ink/80">{person.bio}</p>}
-      <div className="mt-auto flex items-center gap-2 pt-4">
-        <RoleBadge role={person.role} />
-        {person.deletedAt && <span className="text-xs text-muted">Account closed</span>}
-        {person.role === "landlord" && person.propertyCount > 0 && (
-          <span className="text-xs text-muted">{plural(person.propertyCount, "property", "properties")}</span>
-        )}
+      <div className="mt-auto flex flex-wrap items-center gap-x-2 gap-y-1 pt-4">
+        <RoleBadge role={role} />
+        {[
+          role === "landlord" && person.propertyCount > 0
+            ? plural(person.propertyCount, "property", "properties")
+            : null,
+          alsoOther ? `Also a ${role === "landlord" ? "renter" : "landlord"}` : null,
+          person.deletedAt ? "Account closed" : null,
+        ]
+          .filter(Boolean)
+          .map((item) => (
+            <span key={item} className="text-xs text-muted">
+              · {item}
+            </span>
+          ))}
       </div>
     </Link>
   );

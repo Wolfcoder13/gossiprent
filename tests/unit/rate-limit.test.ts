@@ -16,6 +16,9 @@ const testDb = await vi.hoisted(async () => {
   process.env.POSTGRES_URL = "";
   process.env.VERCEL = "";
   delete process.env.AUTH_RATE_LIMIT;
+  // These tests play the part of a reverse proxy that sets X-Real-IP /
+  // X-Forwarded-For, so trust those headers (see clientIp).
+  process.env.TRUST_PROXY_HEADERS = "true";
   return { root, postgres: Boolean(process.env.UNIT_DATABASE_URL) };
 });
 
@@ -159,6 +162,29 @@ describe("clientIp", () => {
   it("supports IPv6 addresses", async () => {
     request.headers = new Headers({ "x-real-ip": "2001:db8::1" });
     expect(await clientIp()).toBe("2001:db8::1");
+  });
+
+  describe("which headers are trusted", () => {
+    afterEach(() => {
+      process.env.TRUST_PROXY_HEADERS = "true";
+      process.env.VERCEL = "";
+    });
+
+    it("ignores them when self-hosting without TRUST_PROXY_HEADERS (a client could fake them)", async () => {
+      request.headers = new Headers({ "x-real-ip": "203.0.113.9", "x-forwarded-for": "198.51.100.9" });
+      for (const value of [undefined, "", "false", "1", "TRUE"]) {
+        if (value === undefined) delete process.env.TRUST_PROXY_HEADERS;
+        else process.env.TRUST_PROXY_HEADERS = value;
+        expect(await clientIp(), `TRUST_PROXY_HEADERS=${value}`).toBeNull();
+      }
+    });
+
+    it("trusts them on Vercel, which sets them itself", async () => {
+      delete process.env.TRUST_PROXY_HEADERS;
+      process.env.VERCEL = "1";
+      request.headers = new Headers({ "x-real-ip": "203.0.113.10" });
+      expect(await clientIp()).toBe("203.0.113.10");
+    });
   });
 });
 

@@ -21,6 +21,9 @@ const testDb = await vi.hoisted(async () => {
   process.env.POSTGRES_URL = "";
   process.env.VERCEL = "";
   delete process.env.AUTH_RATE_LIMIT;
+  // These tests play the part of a reverse proxy that sets X-Real-IP /
+  // X-Forwarded-For, so trust those headers (see clientIp).
+  process.env.TRUST_PROXY_HEADERS = "true";
   return { root, postgres: Boolean(process.env.UNIT_DATABASE_URL) };
 });
 
@@ -128,20 +131,28 @@ function form(fields: Record<string, string>): FormData {
   return data;
 }
 
-type CreatedUser = { id: string; email: string; password: string; role: "landlord" | "renter"; name: string };
+type Roles = "landlord" | "renter" | "both";
+type CreatedUser = { id: string; email: string; password: string; roles: Roles; name: string };
 
 /** Insert a user directly (fast; skips the signup action and its rate limit). */
-async function createUser(role: "landlord" | "renter" = "renter"): Promise<CreatedUser> {
+async function createUser(roles: Roles = "renter"): Promise<CreatedUser> {
   const db = await getDb();
   const id = unique();
   const email = `unit-${id}@example.com`;
   const password = `pw-${id}-secret`;
-  const name = `Unit ${role} ${id}`;
+  const name = `Unit ${roles} ${id}`;
   const [row] = await db
     .insert(users)
-    .values({ name, email, passwordHash: await hashPassword(password), role, city: "Testville" })
+    .values({
+      name,
+      email,
+      passwordHash: await hashPassword(password),
+      isLandlord: roles !== "renter",
+      isRenter: roles !== "landlord",
+      city: "Testville",
+    })
     .returning({ id: users.id });
-  return { id: row.id, email, password, role, name };
+  return { id: row.id, email, password, roles, name };
 }
 
 /** Run an action that's expected to redirect; returns where it redirected to. */
@@ -472,6 +483,21 @@ describe("login rate limiting", () => {
     await logInAs(user);
   }, 30_000);
 
+  it("self-hosted without TRUST_PROXY_HEADERS, a faked IP header doesn't buy fresh attempts", async () => {
+    vi.stubEnv("TRUST_PROXY_HEADERS", "");
+    const user = await createUser();
+    // A new made-up X-Real-IP / X-Forwarded-For on every guess...
+    for (let i = 0; i < 10; i++) {
+      newVisitor();
+      browser.headers.set("x-forwarded-for", freshIp());
+      expect(await tryLogin(user.email, "wrong-password")).toMatchObject({ message: NO_MATCH });
+    }
+    // ...all counted as one unknown network, so the per-account limit kicks in.
+    newVisitor();
+    expect(await tryLogin(user.email, user.password)).toMatchObject({ message: TOO_MANY });
+    expect(await attemptsFor(accountAndIpKey(user.email, "unknown"))).toBe(10);
+  }, 30_000);
+
   it("invalid form input doesn't count as an attempt", async () => {
     const user = await createUser();
     for (let i = 0; i < 15; i++) {
@@ -552,7 +578,7 @@ function signupForm(overrides: Record<string, string> = {}): FormData {
     name: `Signup ${id}`,
     email: `signup-${id}@example.com`,
     password: "long-enough-password",
-    role: "renter",
+    isRenter: "on",
     city: "",
     ...overrides,
   });
@@ -571,7 +597,7 @@ describe("sign-up rate limiting", () => {
     expect(blocked).toMatchObject({
       status: "error",
       message: TOO_MANY,
-      values: { name: `Blocked ${id}`, email: `blocked-${id}@example.com`, role: "renter" },
+      values: { name: `Blocked ${id}`, email: `blocked-${id}@example.com`, isRenter: "on" },
     });
     expect(blocked.values).not.toHaveProperty("password");
     const db = await getDb();
@@ -903,9 +929,9 @@ describe("deleteAccount", () => {
     expect(row.email).toBe(`deleted-${renter.id}@deleted.invalid`);
     expect(row.passwordHash).toBe("deleted");
     expect(row.bio).toBeNull();
-    // Name and role stay so the profile and the reviews about them still make sense.
+    // Name and roles stay so the profile and the reviews about them still make sense.
     expect(row.name).toBe(renter.name);
-    expect(row.role).toBe("renter");
+    expect(row).toMatchObject({ isRenter: true, isLandlord: false });
     // Every session is gone, on all devices.
     expect(await sessionCount(renter.id)).toBe(0);
     // The review about them stays; the one they wrote is gone.

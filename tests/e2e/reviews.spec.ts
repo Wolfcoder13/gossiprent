@@ -609,12 +609,21 @@ test.describe("who can review whom", () => {
     // As a landlord.
     await signUp(page, makeUser("landlord"));
     await page.goto(otherLandlord.profilePath);
-    await expect(page.getByText("Only renters can review landlords. You're signed in as a landlord.")).toBeVisible();
+    await expect(page.getByText("Only renters can review landlords.").first()).toHaveText(
+      "Only renters can review landlords. If you rent too, add the renter role to your account.",
+    );
+    // The link remembers this page, for the way back after adding the role.
+    await expect(page.getByRole("link", { name: "add the renter role to your account" })).toHaveAttribute(
+      "href",
+      `/dashboard?next=${encodeURIComponent(otherLandlord.profilePath)}#roles`,
+    );
     await expect(page.getByRole("button", { name: "Post review" })).toHaveCount(0);
     await expect(page.getByRole("radio")).toHaveCount(0);
 
     await page.goto(propertyPath);
-    await expect(page.getByText("Only renters can review properties. You're signed in as a landlord.")).toBeVisible();
+    await expect(page.getByText("Only renters can review properties.").first()).toHaveText(
+      "Only renters can review properties. If you rent too, add the renter role to your account.",
+    );
     await expect(page.getByRole("button", { name: "Post review" })).toHaveCount(0);
 
     // ...but they can review renters.
@@ -626,7 +635,13 @@ test.describe("who can review whom", () => {
     await expect(page.getByRole("link", { name: "Sign up" }).first()).toBeVisible();
     await signUp(page, makeUser("renter"));
     await page.goto(otherRenter.profilePath);
-    await expect(page.getByText("Only landlords can review renters. You're signed in as a renter.")).toBeVisible();
+    await expect(page.getByText("Only landlords can review renters.").first()).toHaveText(
+      "Only landlords can review renters. If you rent out a home too, add the landlord role to your account.",
+    );
+    await expect(page.getByRole("link", { name: "add the landlord role to your account" })).toHaveAttribute(
+      "href",
+      `/dashboard?next=${encodeURIComponent(otherRenter.profilePath)}#roles`,
+    );
     await expect(page.getByRole("button", { name: "Post review" })).toHaveCount(0);
 
     await otherLandlord.context.close();

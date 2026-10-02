@@ -68,7 +68,7 @@ export async function PersonDirectory({
           <CardGrid>
             {result.items.map((person) => (
               <li key={person.id}>
-                <PersonCard person={person} />
+                <PersonCard person={person} role={role} />
               </li>
             ))}
           </CardGrid>

@@ -1,4 +1,4 @@
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, test, type Browser, type Locator, type Page } from "@playwright/test";
 import {
   addProperty,
   clickAndCancel,
@@ -355,7 +355,8 @@ test.describe("claiming and unlinking a property", () => {
     await renter.context.close();
   });
 
-  test("two landlords claiming at the same time: the first one wins", async ({ browser }) => {
+  /** Two landlords on the same unclaimed property's page; the first claims it. */
+  async function claimRace(browser: Browser) {
     const first = await createActor(browser, "landlord");
     const second = await createActor(browser, "landlord");
     const renter = await createActor(browser, "renter");
@@ -369,6 +370,20 @@ test.describe("claiming and unlinking a property", () => {
     const refused = second.page.getByRole("main").getByRole("alert");
     await expect(refused).toHaveText(ALREADY_MANAGED);
     await expect(refused).toBeFocused();
+    return { first, second, renter, path };
+  }
+
+  test("two landlords claiming at the same time: the first one wins", async ({ browser }) => {
+    const { first, second, renter } = await claimRace(browser);
+    await second.page.reload();
+    await expect(second.page.getByText(`Landlord: ${first.user.name}`)).toBeVisible();
+    await expect(second.page.getByRole("button", { name: CLAIM })).toHaveCount(0);
+    await expect(second.page.getByRole("button", { name: UNLINK })).toHaveCount(0);
+    for (const actor of [first, second, renter]) await actor.context.close();
+  });
+
+  test("a refused claim updates the page to show who manages it", async ({ browser }) => {
+    const { first, second, renter } = await claimRace(browser);
     await expect(second.page.getByText(`Landlord: ${first.user.name}`)).toBeVisible();
     await expect(second.page.getByRole("button", { name: CLAIM })).toHaveCount(0);
     await expect(second.page.getByRole("button", { name: UNLINK })).toHaveCount(0);

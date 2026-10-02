@@ -13,7 +13,7 @@ const LINKS = [
 export function NavLinks({ className }: { className?: string }) {
   const pathname = usePathname();
   return (
-    <ul className={cx("flex items-center gap-1", className)}>
+    <ul className={cx("flex flex-wrap items-center gap-x-1 gap-y-1.5", className)}>
       {LINKS.map((link) => {
         const active = pathname === link.href || pathname.startsWith(`${link.href}/`);
         return (
@@ -22,7 +22,7 @@ export function NavLinks({ className }: { className?: string }) {
               href={link.href}
               aria-current={active ? "page" : undefined}
               className={cx(
-                "rounded-full px-3 py-1.5 text-sm font-medium transition-colors",
+                "inline-block rounded-full px-3 py-1.5 text-sm font-medium transition-colors",
                 active ? "bg-brand-soft text-brand-soft-ink" : "text-muted hover:bg-surface-muted hover:text-ink",
               )}
             >

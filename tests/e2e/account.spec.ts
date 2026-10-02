@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import {
   addProperty,
+  cardMeta,
   clickAndConfirm,
   createActor,
   escapeRegExp,
@@ -209,6 +210,7 @@ test.describe("closing an account", () => {
     await expect(card).toHaveAttribute("href", renterPath);
     await expect(card).toContainText("Account closed");
     await expect(card).toContainText("5 · 1 review");
+    expect(await cardMeta(card)).toEqual(["Renter", "· Account closed"]);
 
     // The reviews they wrote are gone.
     await landlord.page.goto(landlord.profilePath);

@@ -176,7 +176,7 @@ export function SubmitButton({
  * re-mount) after an action, which would otherwise drop focus to <body>.
  */
 export function useFocusAfterSubmit(
-  formRef: RefObject<HTMLFormElement | null>,
+  formRef: RefObject<HTMLElement | null>,
   state: FormState,
 ): void {
   useEffect(() => {
@@ -185,7 +185,7 @@ export function useFocusAfterSubmit(
     const target =
       state.status === "error"
         ? (form.querySelector<HTMLElement>(
-            'fieldset[aria-invalid="true"] input, [aria-invalid="true"]:is(input, textarea, select)',
+            'fieldset[aria-invalid="true"] input, [role="radiogroup"][aria-invalid="true"] input, [aria-invalid="true"]:is(input, textarea, select)',
           ) ?? form.querySelector<HTMLElement>('[role="alert"]'))
         : form.querySelector<HTMLElement>('[role="status"]');
     target?.focus();

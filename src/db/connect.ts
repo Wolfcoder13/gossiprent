@@ -7,6 +7,8 @@ import * as schema from "./schema";
 import { seedDemoData } from "./seed";
 
 export type Database = NodePgDatabase<typeof schema>;
+/** The `tx` handed to a `db.transaction(async (tx) => …)` callback. */
+export type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 
 export type DatabaseMode = "postgres" | "pglite" | "unconfigured";
 

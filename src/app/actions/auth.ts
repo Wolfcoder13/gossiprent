@@ -29,7 +29,7 @@ const tooManyAttempts = (formData: FormData): FormState => ({
 export async function signup(_prev: FormState, formData: FormData): Promise<FormState> {
   const parsed = parseForm(signupSchema, formData);
   if (!parsed.success) return parsed.state;
-  const { name, email, password, role, city } = parsed.data;
+  const { name, email, password, isLandlord, isRenter, city } = parsed.data;
 
   const ip = await clientIp();
   const attempt = await consumeAttempt(
@@ -42,7 +42,14 @@ export async function signup(_prev: FormState, formData: FormData): Promise<Form
   try {
     const [user] = await db
       .insert(users)
-      .values({ name, email, passwordHash: await hashPassword(password), role, city })
+      .values({
+        name,
+        email,
+        passwordHash: await hashPassword(password),
+        isLandlord,
+        isRenter,
+        city,
+      })
       .returning({ id: users.id });
     userId = user.id;
   } catch (error) {
