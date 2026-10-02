@@ -1127,7 +1127,7 @@ describe("per-role ratings", () => {
 // ---------------------------------------------------------------------------
 
 describe("createProperty and roles", () => {
-  function propertyForm(landlordId: string) {
+  function propertyForm(landlordId: string, extra: Record<string, string> = {}) {
     return form({
       address: `${unique()} Roles Property Rd`,
       unit: "",
@@ -1136,12 +1136,16 @@ describe("createProperty and roles", () => {
       postalCode: "",
       description: "",
       landlordId,
+      ...extra,
     });
   }
 
   /** Add a property as the signed-in user; returns its landlord, or the error. */
-  async function add(landlordId: string): Promise<{ landlordId: string | null } | FormState> {
-    const result = await outcome(createProperty(idleFormState, propertyForm(landlordId)));
+  async function add(
+    landlordId: string,
+    extra: Record<string, string> = {},
+  ): Promise<{ landlordId: string | null } | FormState> {
+    const result = await outcome(createProperty(idleFormState, propertyForm(landlordId, extra)));
     if (!("redirect" in result)) return result;
     expect(result.redirect).toMatch(/^\/properties\/[0-9a-f-]{36}$/);
     return { landlordId: await landlordOf(result.redirect.split("/").pop()!) };
@@ -1169,7 +1173,7 @@ describe("createProperty and roles", () => {
   it("someone with both roles can add the place they rent, with or without its landlord", async () => {
     const user = await createUser("both");
     await logInAs(user);
-    expect(await add("")).toEqual({ landlordId: null });
+    expect(await add("", { relation: "rent" })).toEqual({ landlordId: null });
     expect(await add(landlord.id)).toEqual({ landlordId: landlord.id });
     // Another person with both roles is a landlord too.
     expect(await add(both.id)).toEqual({ landlordId: both.id });
@@ -1420,11 +1424,15 @@ describe("createProperty: own or rent", () => {
     expect(await addWith({ landlordId: "me" })).toMatchObject({ landlordId: user.id });
   });
 
-  it("older forms with a landlord picker (and no relation) are treated as renting", async () => {
+  it("picking another landlord counts as renting, but an empty landlord field isn't a choice", async () => {
     const user = await createUser("both");
     await logInAs(user);
     expect(await addWith({ landlordId: landlord.id })).toMatchObject({ landlordId: landlord.id });
-    expect(await addWith({ landlordId: "" })).toMatchObject({ landlordId: null });
+    // Their form always contains the (hidden) landlord picker, so "" alone is ambiguous.
+    expect(await addWith({ landlordId: "" })).toMatchObject({
+      status: "error",
+      fieldErrors: { relation: ["Choose whether you own or rent this place."] },
+    });
   });
 
   it('a renter-only user can\'t use "own" to become the landlord', async () => {

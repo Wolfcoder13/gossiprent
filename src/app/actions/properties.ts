@@ -29,10 +29,17 @@ export async function createProperty(_prev: FormState, formData: FormData): Prom
     fieldErrors: { landlordId: [message] },
     values: formValues(formData),
   });
-  // Someone with both roles must say whether they own or rent the place
-  // (older forms sent landlordId "me" instead).
+  // Someone with both roles must say whether they own or rent the place. A
+  // landlord of "me" (or their own id) means own, and picking another
+  // landlord means rent; an empty landlord field on its own decides nothing
+  // (the picker is always in their form, just hidden until they pick "Rent").
   const relation =
-    data.relation ?? (data.landlordId === "me" ? "own" : data.landlordId !== undefined ? "rent" : undefined);
+    data.relation ??
+    (data.landlordId === "me" || data.landlordId === user.id
+      ? "own"
+      : data.landlordId
+        ? "rent"
+        : undefined);
   if (user.isLandlord && user.isRenter && !relation) {
     return {
       status: "error",

@@ -148,7 +148,7 @@ test.describe("signing up as both", () => {
     await addProperty(page, makeProperty(), { relation: "rent" });
     await page.goto(`/landlords?q=${encodeURIComponent(user.name)}`);
     const asLandlord = page.getByRole("link", { name: new RegExp(escapeRegExp(user.name)) });
-    expect(await cardMeta(asLandlord)).toEqual(["Landlord", "2 properties", "· Also a renter"]);
+    expect(await cardMeta(asLandlord)).toEqual(["Landlord", "· 2 properties", "· Also a renter"]);
     await page.goto(`/renters?q=${encodeURIComponent(user.name)}`);
     const asRenter = page.getByRole("link", { name: new RegExp(escapeRegExp(user.name)) });
     expect(await cardMeta(asRenter)).toEqual(["Renter", "· Also a landlord"]);
