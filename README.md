@@ -1,36 +1,97 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# GossipRent
 
-## Getting Started
+Honest reviews between landlords and renters.
 
-First, run the development server:
+- **Renters** review their **landlords** and the **places they rent**.
+- **Landlords** review their **renters**.
+- Every review has a **1–5 star rating** and a **written review**.
+
+Built with Next.js 16 (App Router), React 19, Tailwind CSS 4, Drizzle ORM, and Postgres.
+
+## Features
+
+- Sign up as a landlord or a renter (email and password).
+- Directories of landlords, renters, and properties, with search and sorting (top rated, most reviewed, newest, A–Z).
+- Profile pages with the average rating, a 5→1 star breakdown, and every review.
+- One review per person per landlord, renter, or property. Writing again edits your review, and you can delete it.
+- Renters can add the place they rent and link it to their landlord. Landlords can list their properties.
+- A dashboard with reviews about you, reviews you've written, your properties, profile editing, and account deletion.
+- Works without JavaScript for browsing and search. Supports dark mode and screen readers.
+
+## Run it locally
+
+You need Node.js 20.9 or newer.
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open http://localhost:3000. No database setup needed: the app creates a built-in Postgres database (PGlite) in `./.data/pglite` the first time it runs and fills it with demo data.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Every demo account uses the password `password123`. For example:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+| Role     | Email                |
+| -------- | -------------------- |
+| Renter   | `jordan@example.com` |
+| Renter   | `lena@example.com`   |
+| Landlord | `maria@example.com`  |
+| Landlord | `sam@example.com`    |
 
-## Learn More
+To start over, stop the dev server and delete the `.data` folder. To start with an empty database instead of demo data, set `SEED_DEMO_DATA=false`.
 
-To learn more about Next.js, take a look at the following resources:
+To use your own Postgres locally, copy `.env.example` to `.env.local` and set `DATABASE_URL`.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Deploy to Vercel
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+1. Push this repository to GitHub and import it in [Vercel](https://vercel.com/new). The default settings work.
+2. In the project's **Storage** tab, choose **Create Database → Neon (Serverless Postgres)** and connect it to the project. This sets `DATABASE_URL` for you.
+3. **Redeploy**. Every build runs the database migrations before `next build`, so the tables are created automatically.
 
-## Deploy on Vercel
+Any Postgres database works: set `DATABASE_URL` (or `POSTGRES_URL`) in the project's environment variables. If you deploy before adding a database, the site shows setup instructions instead of failing.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+New deployments start empty. To add the demo data to a hosted database, run `DATABASE_URL=... npm run db:seed` from your machine. It only seeds an empty database, and every demo account uses the public password above, so don't seed a real production site.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Scripts
+
+| Command               | What it does                                                        |
+| --------------------- | ------------------------------------------------------------------- |
+| `npm run dev`         | Start the development server.                                       |
+| `npm run build`       | Apply database migrations (when `DATABASE_URL` is set), then build. |
+| `npm start`           | Serve the production build.                                         |
+| `npm run lint`        | Run ESLint.                                                         |
+| `npm run typecheck`   | Type-check with TypeScript.                                         |
+| `npm test`            | Run the unit tests (Vitest).                                        |
+| `npm run test:e2e`    | Run the end-to-end tests (Playwright). Run `npm run build` first.   |
+| `npm run db:generate` | Create a new migration after changing `src/db/schema.ts`.           |
+| `npm run db:migrate`  | Apply migrations to `DATABASE_URL`.                                 |
+| `npm run db:seed`     | Add demo data to an empty database.                                 |
+| `npm run db:studio`   | Browse the database with Drizzle Studio.                            |
+
+## Project layout
+
+```
+src/
+  app/                 Pages and Server Actions (app/actions/*)
+  components/          UI components (star rating, review form, cards…)
+  db/                  Drizzle schema, connection, demo seed data
+  lib/                 Auth, validation, data queries, formatting
+drizzle/               SQL migrations (generated by drizzle-kit)
+scripts/               migrate.mjs and seed.ts
+tests/                 Unit (Vitest) and end-to-end (Playwright) tests
+```
+
+## How it works
+
+- **Accounts**: passwords are hashed with scrypt. Sessions are random tokens stored in an httpOnly cookie. Only a SHA-256 hash of each token is kept in the database. Email addresses are never shown publicly.
+- **Who can review whom** is enforced on the server in `src/app/actions/reviews.ts`. Renters review landlords and properties, landlords review renters, nobody reviews themselves, and the database allows one review per author per subject.
+- **Database**: with `DATABASE_URL` set, the app uses that Postgres database. Without it, the app uses the embedded database locally, or shows setup instructions on Vercel.
+
+## Before you launch publicly
+
+This is a working first version. Before opening it to the public, consider:
+
+- **Moderation**: a way to report reviews, and an admin view to remove abusive ones.
+- **Abuse protection**: rate limiting on sign-up, login, and posting (for example with Vercel's firewall or Upstash). Also email verification.
+- **Legal**: reviews about real people carry defamation and privacy risk, and in some places (for example under the US Fair Credit Reporting Act) tenant screening is regulated. Add terms of service and a privacy policy, and get legal advice.
+- **Landlords who aren't members yet**: right now only registered landlords and renters can be reviewed. A common next step is letting renters create profiles for landlords who haven't joined, which landlords can claim later.
