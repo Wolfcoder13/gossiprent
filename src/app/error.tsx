@@ -5,10 +5,11 @@ import { buttonStyles, cx } from "@/components/ui";
 
 export default function ErrorPage({
   error,
-  reset,
+  retry,
 }: {
   error: Error & { digest?: string };
-  reset: () => void;
+  /** Re-fetches the failed segment from the server and re-renders it. */
+  retry: () => void;
 }) {
   useEffect(() => {
     console.error(error);
@@ -21,7 +22,7 @@ export default function ErrorPage({
         Sorry about that. Please try again in a moment.
         {error.digest && <span className="mt-2 block text-xs">Error reference: {error.digest}</span>}
       </p>
-      <button type="button" onClick={reset} className={cx(buttonStyles.base, buttonStyles.primary, "mt-8")}>
+      <button type="button" onClick={() => retry()} className={cx(buttonStyles.base, buttonStyles.primary, "mt-8")}>
         Try again
       </button>
     </div>

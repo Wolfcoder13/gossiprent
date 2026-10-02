@@ -1,0 +1,7 @@
+# Keep local-only files out of `vercel` CLI deploys (Git deploys never include them).
+.data
+.env*
+!.env.example
+/test-results
+/playwright-report
+/blob-report

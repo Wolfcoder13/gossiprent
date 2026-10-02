@@ -40,7 +40,7 @@ if (!url) {
   process.exit(0);
 }
 
-const pool = new pg.Pool({ connectionString: url, max: 1 });
+const pool = new pg.Pool({ connectionString: url, max: 1, connectionTimeoutMillis: 15_000 });
 try {
   await migrate(drizzle(pool), {
     migrationsFolder: path.join(process.cwd(), "drizzle"),

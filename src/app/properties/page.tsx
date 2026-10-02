@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { CardGrid, PropertyCard } from "@/components/cards";
 import { DirectoryFilters, DirectoryLayout } from "@/components/directory";
-import { Pagination } from "@/components/pagination";
+import { Pagination, redirectIfPastLastPage } from "@/components/pagination";
 import { ButtonLink, EmptyState, PageHeader } from "@/components/ui";
 import { listProperties, parsePage, parseQuery, parseSort } from "@/lib/data";
 import { plural } from "@/lib/format";
@@ -10,11 +10,19 @@ import { plural } from "@/lib/format";
 export const metadata: Metadata = { title: "Properties" };
 
 export default async function PropertiesPage({ searchParams }: PageProps<"/properties">) {
-  const params = await searchParams;
-  const query = parseQuery(params.q);
-  const sort = parseSort(params.sort);
-  const page = parsePage(params.page);
+  const search = await searchParams;
+  const query = parseQuery(search.q);
+  const sort = parseSort(search.sort);
+  const page = parsePage(search.page);
   const result = await listProperties({ query, sort, page });
+  const params = { q: query || undefined, sort: sort === "top" ? undefined : sort };
+  redirectIfPastLastPage({
+    page,
+    pageCount: result.pageCount,
+    total: result.total,
+    basePath: "/properties",
+    params,
+  });
 
   return (
     <DirectoryLayout
@@ -59,7 +67,7 @@ export default async function PropertiesPage({ searchParams }: PageProps<"/prope
             page={page}
             pageCount={result.pageCount}
             basePath="/properties"
-            params={{ q: query || undefined, sort: sort === "top" ? undefined : sort }}
+            params={params}
           />
         </>
       ) : (

@@ -1,4 +1,3 @@
-import Link from "next/link";
 import type { ReactNode } from "react";
 import type { ReviewKind } from "@/db/schema";
 import type { SessionUser } from "@/lib/auth/current-user";
@@ -106,11 +105,10 @@ export function ReviewPanel({
   );
 }
 
-export function ReviewsHeading({ count, href }: { count: number; href?: string }) {
+export function ReviewsHeading({ id, count }: { id?: string; count: number }) {
   return (
-    <h2 className="text-xl font-bold tracking-tight text-ink">
-      {href ? <Link href={href}>Reviews</Link> : "Reviews"}{" "}
-      <span className="font-normal text-muted">({count})</span>
+    <h2 id={id} className="text-xl font-bold tracking-tight text-ink">
+      Reviews <span className="font-normal text-muted">({count})</span>
     </h2>
   );
 }

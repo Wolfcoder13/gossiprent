@@ -46,11 +46,17 @@ export const profileSchema = z.object({
   bio: optionalText(500, "Bio"),
 });
 
+export const passwordChangeSchema = z.object({
+  currentPassword: z.string().min(1, "Enter your current password.").max(128),
+  newPassword: signupSchema.shape.password,
+});
+
 export const reviewSchema = z.object({
   kind: z.enum(["landlord", "renter", "property"]),
   subjectId: z.uuid("That review target doesn't exist."),
   rating: z.coerce
-    .number()
+    // Without this, a missing rating shows zod's "expected number, received NaN".
+    .number({ error: "Pick a star rating from 1 to 5." })
     .int("Pick a star rating.")
     .min(1, "Pick a star rating from 1 to 5.")
     .max(5, "Pick a star rating from 1 to 5."),
@@ -106,15 +112,20 @@ export type FormState = {
 
 export const idleFormState: FormState = { status: "idle" };
 
-/** Plain string values from a FormData, skipping files and passwords. */
-export function formValues(
-  formData: FormData,
-  omit: string[] = ["password"],
-): Record<string, string> {
+/**
+ * Postgres can't store or compare text containing NUL characters (it errors),
+ * and they're never meaningful in this app, so drop them from all user input.
+ */
+export function stripNul(value: string): string {
+  return value.includes("\u0000") ? value.replaceAll("\u0000", "") : value;
+}
+
+/** Plain string values from a FormData, skipping files and anything password-like. */
+export function formValues(formData: FormData): Record<string, string> {
   const values: Record<string, string> = {};
   for (const [key, value] of formData.entries()) {
-    if (typeof value === "string" && !key.startsWith("$") && !omit.includes(key)) {
-      values[key] = value;
+    if (typeof value === "string" && !key.startsWith("$") && !/password/i.test(key)) {
+      values[key] = stripNul(value);
     }
   }
   return values;
@@ -127,7 +138,11 @@ export function parseForm<T extends z.ZodType>(
 ):
   | { success: true; data: z.output<T> }
   | { success: false; state: FormState } {
-  const result = schema.safeParse(Object.fromEntries(formData.entries()));
+  const input: Record<string, unknown> = {};
+  for (const [key, value] of formData.entries()) {
+    input[key] = typeof value === "string" ? stripNul(value) : value;
+  }
+  const result = schema.safeParse(input);
   if (result.success) return { success: true, data: result.data };
   return {
     success: false,
@@ -151,5 +166,16 @@ export function safeRedirectPath(value: unknown, fallback = "/"): string {
   if (/[\\\u0000-\u001f\u007f]/.test(value) || value.startsWith("//")) {
     return fallback;
   }
-  return value;
+  // Resolve dot-segments the way the browser will ("/.//evil.example" becomes
+  // "//evil.example") and percent-encode non-ASCII so the result is also a
+  // valid redirect header. Then re-check what's left.
+  let url: URL;
+  try {
+    url = new URL(value, "http://localhost");
+  } catch {
+    return fallback;
+  }
+  const path = url.pathname + url.search + url.hash;
+  if (url.origin !== "http://localhost" || path.startsWith("//")) return fallback;
+  return path;
 }

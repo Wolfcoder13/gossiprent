@@ -1,11 +1,13 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { Pagination } from "@/components/pagination";
+import { unlinkProperty, claimProperty } from "@/app/actions/properties";
+import { ConfirmForm } from "@/components/confirm-form";
+import { Pagination, redirectIfPastLastPage } from "@/components/pagination";
 import { RatingSummary } from "@/components/rating-summary";
 import { ReviewList } from "@/components/review-card";
 import { ReviewPanel, ReviewsHeading } from "@/components/review-panel";
-import { Avatar, Card, EmptyState, RoleBadge } from "@/components/ui";
+import { Avatar, ButtonLink, buttonStyles, Card, cx, EmptyState, RoleBadge } from "@/components/ui";
 import { getCurrentUser } from "@/lib/auth/current-user";
 import {
   getProperty,
@@ -38,51 +40,93 @@ export default async function PropertyPage({ params, searchParams }: PageProps<"
   ]);
   const label = propertyLabel(property);
   const path = `/properties/${id}`;
+  redirectIfPastLastPage({
+    page,
+    pageCount: reviewPage.pageCount,
+    total: reviewPage.total,
+    basePath: path,
+    hash: "reviews",
+  });
   const isOwner = Boolean(viewer && property.landlord?.id === viewer.id);
+  const canClaim = viewer?.role === "landlord" && !property.landlord;
+  const mayReview = !isOwner && (!viewer || viewer.role === "renter");
+  const smallButton = cx(buttonStyles.base, buttonStyles.secondary, "px-3 py-1.5 text-xs");
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-10 sm:px-6">
-      <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_22rem]">
+      <div className="grid grid-cols-1 gap-8 lg:grid-cols-[minmax(0,1fr)_22rem]">
         <div className="space-y-8">
           <Card as="section">
             <div className="flex flex-wrap items-center gap-2">
               <RoleBadge role="property" />
               <span className="text-xs text-muted">Listed {formatMonthYear(property.createdAt)}</span>
             </div>
-            <h1 className="mt-2 text-2xl font-bold tracking-tight text-ink sm:text-3xl">{label}</h1>
+            <h1 className="mt-2 break-words text-2xl font-bold tracking-tight text-ink sm:text-3xl">
+              {label}
+            </h1>
             <p className="mt-1 text-muted">
               {property.city}, {property.region}
               {property.postalCode ? ` ${property.postalCode}` : ""}
             </p>
-            {property.description && <p className="mt-3 text-ink/85">{property.description}</p>}
+            {property.description && (
+              <p className="mt-3 break-words text-ink/85">{property.description}</p>
+            )}
 
-            <div className="mt-5 flex items-center gap-3 rounded-xl bg-surface-muted px-4 py-3">
+            <div className="mt-5 flex flex-wrap items-center gap-3 rounded-xl bg-surface-muted px-4 py-3">
               {property.landlord ? (
                 <>
                   <Avatar name={property.landlord.name} id={property.landlord.id} size="sm" />
-                  <p className="text-sm text-muted">
+                  <p className="min-w-0 flex-1 text-sm text-muted">
                     Landlord:{" "}
                     <Link
                       href={`/landlords/${property.landlord.id}`}
-                      className="font-semibold text-ink hover:underline"
+                      className="break-words font-semibold text-ink hover:underline"
                     >
                       {property.landlord.name}
                     </Link>
                   </p>
+                  {isOwner && (
+                    <ConfirmForm
+                      action={unlinkProperty}
+                      fields={{ propertyId: property.id }}
+                      confirmMessage="Remove yourself as the landlord of this property? The listing and its reviews stay on GossipRent."
+                    >
+                      <button type="submit" className={smallButton}>
+                        Not my property
+                      </button>
+                    </ConfirmForm>
+                  )}
                 </>
               ) : (
-                <p className="text-sm text-muted">The landlord for this property isn&apos;t on GossipRent yet.</p>
+                <>
+                  <p className="min-w-0 flex-1 text-sm text-muted">
+                    The landlord for this property isn&apos;t on GossipRent yet.
+                  </p>
+                  {canClaim && (
+                    <form action={claimProperty}>
+                      <input type="hidden" name="propertyId" value={property.id} />
+                      <button type="submit" className={smallButton}>
+                        I manage this property
+                      </button>
+                    </form>
+                  )}
+                </>
               )}
             </div>
 
             <div className="mt-6 border-t border-line pt-6">
               <RatingSummary summary={summary} />
             </div>
+            {mayReview && (
+              <ButtonLink href="#your-review" className="mt-6 w-full lg:hidden">
+                {myReview ? "Edit your review" : "Review this property"}
+              </ButtonLink>
+            )}
           </Card>
 
           <section aria-labelledby="reviews-heading" id="reviews" className="scroll-mt-24">
-            <div id="reviews-heading" className="mb-4">
-              <ReviewsHeading count={reviewPage.total} />
+            <div className="mb-4">
+              <ReviewsHeading id="reviews-heading" count={reviewPage.total} />
               <p className="text-sm text-muted">What renters say about living here.</p>
             </div>
             {reviewPage.items.length > 0 ? (
@@ -98,7 +142,7 @@ export default async function PropertyPage({ params, searchParams }: PageProps<"
           </section>
         </div>
 
-        <aside className="lg:sticky lg:top-24 lg:self-start">
+        <aside className="lg:sticky lg:top-24 lg:-m-1 lg:max-h-[calc(100dvh-7rem)] lg:self-start lg:overflow-y-auto lg:p-1">
           <ReviewPanel
             kind="property"
             subjectId={property.id}

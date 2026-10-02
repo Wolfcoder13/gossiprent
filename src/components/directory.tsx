@@ -36,7 +36,7 @@ export function DirectoryFilters({
         type="search"
         defaultValue={query}
         placeholder={placeholder}
-        className="min-w-0 flex-1 rounded-xl border border-line-strong bg-surface px-4 py-2.5 text-ink placeholder:text-muted/70 focus:border-brand focus:outline-none focus:ring-2 focus:ring-focus/40"
+        className="min-w-0 flex-1 rounded-xl border border-line-input bg-surface px-4 py-2.5 text-ink placeholder:text-muted/70 focus:border-brand focus:outline-none focus:ring-2 focus:ring-focus/40"
       />
       <label htmlFor="directory-sort" className="sr-only">
         Sort by
@@ -45,7 +45,7 @@ export function DirectoryFilters({
         id="directory-sort"
         name="sort"
         defaultValue={sort}
-        className="rounded-xl border border-line-strong bg-surface px-3 py-2.5 text-ink focus:border-brand focus:outline-none focus:ring-2 focus:ring-focus/40"
+        className="rounded-xl border border-line-input bg-surface px-3 py-2.5 text-ink focus:border-brand focus:outline-none focus:ring-2 focus:ring-focus/40"
       >
         {SORTS.map((option) => (
           <option key={option.value} value={option.value}>

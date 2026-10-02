@@ -26,6 +26,7 @@ export function PersonCard({ person }: { person: PersonListItem }) {
       {person.bio && <p className="mt-3 line-clamp-2 text-sm text-ink/80">{person.bio}</p>}
       <div className="mt-auto flex items-center gap-2 pt-4">
         <RoleBadge role={person.role} />
+        {person.deletedAt && <span className="text-xs text-muted">Account closed</span>}
         {person.role === "landlord" && person.propertyCount > 0 && (
           <span className="text-xs text-muted">{plural(person.propertyCount, "property", "properties")}</span>
         )}

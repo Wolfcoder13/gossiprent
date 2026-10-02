@@ -10,6 +10,7 @@
   --surface-muted: #f1efea;
   --line: #e4e1da;
   --line-strong: #cfcac0;
+  --line-input: #8a8478;
   --ink: #1d1b18;
   --muted: #6b665d;
   --brand: #4338ca;
@@ -18,7 +19,7 @@
   --brand-soft: #eef0ff;
   --brand-soft-ink: #3730a3;
   --star: #f59e0b;
-  --star-empty: #dcd7cd;
+  --star-empty: #c4bdb0;
   --danger: #b91c1c;
   --danger-soft: #fef2f2;
   --success: #047857;
@@ -33,6 +34,7 @@
     --surface-muted: #24221e;
     --line: #2f2c27;
     --line-strong: #45413a;
+    --line-input: #7a756b;
     --ink: #f3f1ec;
     --muted: #a8a296;
     --brand: #818cf8;
@@ -56,6 +58,7 @@
   --color-surface-muted: var(--surface-muted);
   --color-line: var(--line);
   --color-line-strong: var(--line-strong);
+  --color-line-input: var(--line-input);
   --color-ink: var(--ink);
   --color-muted: var(--muted);
   --color-brand: var(--brand);

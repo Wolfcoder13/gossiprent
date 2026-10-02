@@ -4,10 +4,10 @@
 // example, the database being unreachable). It replaces the whole document.
 export default function GlobalError({
   error,
-  reset,
+  retry,
 }: {
   error: Error & { digest?: string };
-  reset: () => void;
+  retry: () => void;
 }) {
   return (
     <html lang="en">
@@ -23,7 +23,7 @@ export default function GlobalError({
         </p>
         <button
           type="button"
-          onClick={reset}
+          onClick={() => retry()}
           style={{
             marginTop: "1.5rem",
             padding: "0.6rem 1.25rem",

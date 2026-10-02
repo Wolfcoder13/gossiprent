@@ -54,19 +54,24 @@ export function ReviewCard({
             </p>
           </div>
         </div>
-        <Stars rating={review.rating} size="sm" />
+        <span className="flex items-center gap-1.5">
+          <Stars rating={review.rating} size="sm" />
+          <span aria-hidden className="text-sm font-semibold tabular-nums text-ink">
+            {review.rating}/5
+          </span>
+        </span>
       </header>
 
       {showSubject && (
         <p className="mt-3 text-sm text-muted">
           {review.subject.kind === "property" ? "Lived at " : "Reviewed "}
-          <Link href={subjectHref} className="font-medium text-ink hover:underline">
+          <Link href={subjectHref} className="break-words font-medium text-ink hover:underline">
             {review.subject.name}
           </Link>
         </p>
       )}
 
-      <h3 className="mt-3 font-semibold text-ink">{review.title}</h3>
+      <h3 className="mt-3 break-words font-semibold text-ink">{review.title}</h3>
       <p className="mt-1.5 whitespace-pre-line break-words text-ink/85">{review.body}</p>
 
       {isMine && (

@@ -4,16 +4,15 @@ import { listPeople, type PersonSort } from "@/lib/data";
 import { plural } from "@/lib/format";
 import { CardGrid, PersonCard } from "./cards";
 import { DirectoryFilters, DirectoryLayout } from "./directory";
-import { Pagination } from "./pagination";
-import { EmptyState, PageHeader } from "./ui";
+import { Pagination, redirectIfPastLastPage } from "./pagination";
+import { ButtonLink, EmptyState, PageHeader } from "./ui";
 
 const COPY: Record<UserRole, { title: string; description: string; noun: [string, string]; empty: string }> = {
   landlord: {
     title: "Landlords",
     description: "See how landlords are rated by the people who've rented from them.",
     noun: ["landlord", "landlords"],
-    empty:
-      "Landlords show up here once they create an account. Know a great (or not-so-great) landlord? Invite them to join.",
+    empty: "Landlords show up here once they create an account.",
   },
   renter: {
     title: "Renters",
@@ -37,6 +36,8 @@ export async function PersonDirectory({
   const copy = COPY[role];
   const result = await listPeople({ role, query, sort, page });
   const basePath = `/${role}s`;
+  const params = { q: query || undefined, sort: sort === "top" ? undefined : sort };
+  redirectIfPastLastPage({ page, pageCount: result.pageCount, total: result.total, basePath, params });
 
   return (
     <DirectoryLayout
@@ -75,12 +76,23 @@ export async function PersonDirectory({
             page={page}
             pageCount={result.pageCount}
             basePath={basePath}
-            params={{ q: query || undefined, sort: sort === "top" ? undefined : sort }}
+            params={params}
           />
         </>
       ) : (
-        <EmptyState title={query ? `No ${copy.noun[1]} match “${query}”` : `No ${copy.noun[1]} yet`}>
+        <EmptyState
+          title={query ? `No ${copy.noun[1]} match “${query}”` : `No ${copy.noun[1]} yet`}
+          action={
+            role === "landlord" ? (
+              <ButtonLink href="/properties/new" variant="secondary">
+                Review the place you rented instead
+              </ButtonLink>
+            ) : undefined
+          }
+        >
           {query ? "Try a different name or city." : copy.empty}
+          {role === "landlord" &&
+            " If your landlord isn't on GossipRent, you can still add and review the property you rented."}
         </EmptyState>
       )}
     </DirectoryLayout>

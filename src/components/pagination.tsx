@@ -1,5 +1,23 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
+import { pageHref } from "@/lib/paths";
 import { buttonStyles, cx } from "./ui";
+
+/**
+ * Send a request for a page past the end (an old link, or the last review on
+ * the last page was deleted) to the last page that exists.
+ */
+export function redirectIfPastLastPage(options: {
+  page: number;
+  pageCount: number;
+  total: number;
+  basePath: string;
+  params?: Record<string, string | undefined>;
+  hash?: string;
+}): void {
+  const { page, pageCount, total, basePath, params, hash } = options;
+  if (total > 0 && page > pageCount) redirect(pageHref(basePath, pageCount, params, hash));
+}
 
 /** Previous / next links that keep the other search params (q, sort…). */
 export function Pagination({
@@ -17,15 +35,7 @@ export function Pagination({
 }) {
   if (pageCount <= 1) return null;
 
-  const href = (target: number) => {
-    const search = new URLSearchParams();
-    for (const [key, value] of Object.entries(params)) {
-      if (value) search.set(key, value);
-    }
-    if (target > 1) search.set("page", String(target));
-    const qs = search.toString();
-    return `${basePath}${qs ? `?${qs}` : ""}${hash ? `#${hash}` : ""}`;
-  };
+  const href = (target: number) => pageHref(basePath, target, params, hash);
 
   const linkClass = cx(buttonStyles.base, buttonStyles.secondary);
   const disabledClass = cx(linkClass, "pointer-events-none opacity-40");

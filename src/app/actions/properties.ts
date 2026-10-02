@@ -1,12 +1,12 @@
 "use server";
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getDb, pgErrorCode } from "@/db";
 import { properties, users } from "@/db/schema";
 import { getCurrentUser } from "@/lib/auth/current-user";
-import { findPropertyByAddress } from "@/lib/data";
+import { findPropertyByAddress, getProperty, isUuid } from "@/lib/data";
 import { formValues, parseForm, propertySchema, type FormState } from "@/lib/validation";
 
 /** Add a property. Landlords always add it as their own; renters may link a landlord. */
@@ -26,7 +26,9 @@ export async function createProperty(_prev: FormState, formData: FormData): Prom
     const [landlord] = await db
       .select({ id: users.id })
       .from(users)
-      .where(and(eq(users.id, data.landlordId), eq(users.role, "landlord")))
+      .where(
+        and(eq(users.id, data.landlordId), eq(users.role, "landlord"), isNull(users.deletedAt)),
+      )
       .limit(1);
     if (!landlord) {
       return {
@@ -39,12 +41,21 @@ export async function createProperty(_prev: FormState, formData: FormData): Prom
     landlordId = landlord.id;
   }
 
-  const duplicate = (existingId: string): FormState => ({
-    status: "error",
-    message: "This property is already listed on GossipRent.",
-    link: { href: `/properties/${existingId}`, label: "Go to the existing listing" },
-    values: formValues(formData),
-  });
+  const duplicate = async (existingId: string): Promise<FormState> => {
+    const existing = await getProperty(existingId);
+    const claimable = user.role === "landlord" && existing && !existing.landlord;
+    return {
+      status: "error",
+      message: claimable
+        ? "This property is already listed, without a landlord. If you manage it, you can claim it."
+        : "This property is already listed on GossipRent.",
+      link: {
+        href: `/properties/${existingId}`,
+        label: claimable ? "Go to the listing to claim it" : "Go to the existing listing",
+      },
+      values: formValues(formData),
+    };
+  };
 
   const existing = await findPropertyByAddress(data);
   if (existing) return duplicate(existing.id);
@@ -76,4 +87,42 @@ export async function createProperty(_prev: FormState, formData: FormData): Prom
   revalidatePath("/dashboard");
   if (landlordId) revalidatePath(`/landlords/${landlordId}`);
   redirect(`/properties/${propertyId}`);
+}
+
+function revalidatePropertyPages(propertyId: string, landlordIds: (string | null)[]) {
+  revalidatePath(`/properties/${propertyId}`);
+  revalidatePath("/properties");
+  revalidatePath("/dashboard");
+  for (const id of landlordIds) if (id) revalidatePath(`/landlords/${id}`);
+}
+
+/** A landlord claims a listed property that has no landlord yet. */
+export async function claimProperty(formData: FormData): Promise<void> {
+  const user = await getCurrentUser();
+  const propertyId = formData.get("propertyId");
+  if (!user || user.role !== "landlord" || typeof propertyId !== "string" || !isUuid(propertyId)) {
+    return;
+  }
+  const db = await getDb();
+  await db
+    .update(properties)
+    .set({ landlordId: user.id })
+    .where(and(eq(properties.id, propertyId), isNull(properties.landlordId)));
+  revalidatePropertyPages(propertyId, [user.id]);
+}
+
+/**
+ * The linked landlord removes themselves from a property (e.g. a renter linked
+ * the wrong landlord). The listing and its reviews stay.
+ */
+export async function unlinkProperty(formData: FormData): Promise<void> {
+  const user = await getCurrentUser();
+  const propertyId = formData.get("propertyId");
+  if (!user || typeof propertyId !== "string" || !isUuid(propertyId)) return;
+  const db = await getDb();
+  await db
+    .update(properties)
+    .set({ landlordId: null })
+    .where(and(eq(properties.id, propertyId), eq(properties.landlordId, user.id)));
+  revalidatePropertyPages(propertyId, [user.id]);
 }

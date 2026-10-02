@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useEffect, useRef } from "react";
 import { saveReview } from "@/app/actions/reviews";
 import type { ReviewKind } from "@/db/schema";
 import { idleFormState } from "@/lib/validation";
@@ -32,6 +32,7 @@ export function ReviewForm({
   existing?: { rating: number; title: string; body: string } | null;
 }) {
   const [state, formAction] = useActionState(saveReview, idleFormState);
+  const formRef = useRef<HTMLFormElement>(null);
   // After a failed submit, re-fill what the user typed; otherwise show their saved review.
   const values =
     state.status === "error" && state.values
@@ -43,8 +44,28 @@ export function ReviewForm({
   // A success message only makes sense while the review still exists (not after deleting it).
   const message = state.status === "success" && !existing ? idleFormState : state;
 
+  // The form re-mounts after each submission (see `key`), which drops focus.
+  // Put it on the first field that needs fixing, or on the success message.
+  useEffect(() => {
+    const form = formRef.current;
+    if (!form || state.status === "idle") return;
+    const target =
+      state.status === "error"
+        ? form.querySelector<HTMLElement>(
+            'fieldset[aria-invalid="true"] input, [aria-invalid="true"]:is(input, textarea)',
+          )
+        : form.querySelector<HTMLElement>('[role="status"]');
+    target?.focus();
+  }, [state]);
+
   return (
-    <form action={formAction} className="space-y-5" noValidate key={JSON.stringify(values)}>
+    <form
+      ref={formRef}
+      action={formAction}
+      className="space-y-5"
+      noValidate
+      key={JSON.stringify(values)}
+    >
       <input type="hidden" name="kind" value={kind} />
       <input type="hidden" name="subjectId" value={subjectId} />
       <FormMessage state={message} />

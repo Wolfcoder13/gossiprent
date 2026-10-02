@@ -1,6 +1,6 @@
 import "server-only";
 import { createHash, randomBytes } from "node:crypto";
-import { and, eq, gt, lt } from "drizzle-orm";
+import { and, eq, gt, isNull, lt, ne } from "drizzle-orm";
 import { cookies } from "next/headers";
 import { getDb } from "@/db";
 import { sessions, users } from "@/db/schema";
@@ -44,6 +44,20 @@ export async function deleteSession(): Promise<void> {
   cookieStore.delete(SESSION_COOKIE);
 }
 
+/** Sign the user out everywhere except this browser (e.g. after a password change). */
+export async function deleteOtherSessions(userId: string): Promise<void> {
+  const cookieStore = await cookies();
+  const token = cookieStore.get(SESSION_COOKIE)?.value;
+  const db = await getDb();
+  await db
+    .delete(sessions)
+    .where(
+      token
+        ? and(eq(sessions.userId, userId), ne(sessions.id, hashToken(token)))
+        : eq(sessions.userId, userId),
+    );
+}
+
 export type SessionUser = {
   id: string;
   name: string;
@@ -74,7 +88,11 @@ export async function readSessionUser(): Promise<SessionUser | null> {
     .from(sessions)
     .innerJoin(users, eq(users.id, sessions.userId))
     .where(
-      and(eq(sessions.id, hashToken(token)), gt(sessions.expiresAt, new Date())),
+      and(
+        eq(sessions.id, hashToken(token)),
+        gt(sessions.expiresAt, new Date()),
+        isNull(users.deletedAt),
+      ),
     )
     .limit(1);
   return row ?? null;

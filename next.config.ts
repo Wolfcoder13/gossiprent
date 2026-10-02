@@ -4,11 +4,15 @@ const nextConfig: NextConfig = {
   // PGlite (the zero-config local database) ships WASM + data files that must be
   // loaded with Node's native require instead of being bundled.
   serverExternalPackages: ["@electric-sql/pglite"],
-  // On Vercel the app always uses DATABASE_URL, so leave the ~26 MB embedded
-  // database out of the deployed functions.
-  outputFileTracingExcludes: process.env.VERCEL
-    ? { "/*": ["node_modules/@electric-sql/pglite/**"] }
-    : undefined,
+  outputFileTracingExcludes: {
+    "/*": [
+      // Never ship a local embedded database (it holds password hashes).
+      ".data/**",
+      // On Vercel the app always uses DATABASE_URL, so leave the ~26 MB
+      // embedded database engine out of the deployed functions too.
+      ...(process.env.VERCEL ? ["node_modules/@electric-sql/pglite/**"] : []),
+    ],
+  },
   poweredByHeader: false,
   async headers() {
     return [

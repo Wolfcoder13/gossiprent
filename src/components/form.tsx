@@ -7,7 +7,7 @@ import type { FormState } from "@/lib/validation";
 import { buttonStyles, cx, Notice } from "./ui";
 
 const inputStyles =
-  "block w-full rounded-xl border border-line-strong bg-surface px-3.5 py-2.5 text-ink placeholder:text-muted/70 shadow-xs transition-colors focus:border-brand focus:outline-none focus:ring-2 focus:ring-focus/40 aria-invalid:border-danger";
+  "block w-full rounded-xl border border-line-input bg-surface px-3.5 py-2.5 text-ink placeholder:text-muted/70 shadow-xs transition-colors focus:border-brand focus:outline-none focus:ring-2 focus:ring-focus/40 aria-invalid:border-danger";
 
 type FieldProps = {
   label: string;

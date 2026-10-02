@@ -39,6 +39,9 @@ export const users = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
+    // Set when someone closes their account. The profile stays (anonymized
+    // login details, no bio) so reviews others wrote about them aren't erased.
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
   },
   (t) => [
     uniqueIndex("users_email_unique").on(t.email),
@@ -143,6 +146,22 @@ export const reviews = pgTable(
     index("reviews_author_idx").on(t.authorId, t.createdAt),
     index("reviews_created_at_idx").on(t.createdAt),
   ],
+);
+
+/**
+ * One row per recent login/signup attempt, keyed by e.g. "login:ip:1.2.3.4".
+ * Used for rate limiting; old rows are pruned as new ones are written.
+ */
+export const authAttempts = pgTable(
+  "auth_attempts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    key: text("key").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [index("auth_attempts_key_created_at_idx").on(t.key, t.createdAt)],
 );
 
 export type UserRole = (typeof userRole.enumValues)[number];

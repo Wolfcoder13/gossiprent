@@ -60,7 +60,12 @@ function connectPostgres(connectionString: string): Database {
     connectionString,
     max: Number(process.env.DATABASE_POOL_MAX) || 5,
     idleTimeoutMillis: 10_000,
+    // Fail fast (instead of hanging the request) if the database is unreachable.
+    connectionTimeoutMillis: 10_000,
   });
+  // An idle connection dropped by the server emits "error" on the pool; without
+  // a listener that would crash the whole process.
+  pool.on("error", (error) => console.error("[db] Idle database connection error:", error));
   // On Vercel Fluid compute this keeps the function alive just long enough to
   // close idle connections cleanly. It's a no-op everywhere else.
   attachDatabasePool(pool);
@@ -86,7 +91,11 @@ async function connectPglite(): Promise<Database> {
 
   // Both drivers expose the same Postgres query builder at runtime.
   const database = db as unknown as Database;
-  if (isFresh && process.env.SEED_DEMO_DATA !== "false") {
+  // Demo data (with its publicly known password) is only added automatically in
+  // development. Set SEED_DEMO_DATA=true or false to override.
+  const seed = process.env.SEED_DEMO_DATA;
+  const shouldSeed = seed ? seed === "true" : process.env.NODE_ENV !== "production";
+  if (isFresh && shouldSeed) {
     await seedDemoData(database);
     console.log(
       "[db] Created a local database in %s with demo data " +

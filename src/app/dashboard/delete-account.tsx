@@ -9,14 +9,14 @@ export function DeleteAccount() {
       action={deleteAccount}
       onSubmit={(event) => {
         const ok = window.confirm(
-          "Delete your account? Your reviews, and reviews written about you, will be permanently removed.",
+          "Close your account? Your login and the reviews you wrote will be permanently deleted.",
         );
         if (!ok) event.preventDefault();
       }}
     >
       <input type="hidden" name="confirm" value="delete" />
-      <SubmitButton variant="danger" pendingLabel="Deleting…">
-        Delete my account
+      <SubmitButton variant="danger" pendingLabel="Closing…">
+        Close my account
       </SubmitButton>
     </form>
   );

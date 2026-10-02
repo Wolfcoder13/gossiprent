@@ -48,18 +48,30 @@ export async function verifyPassword(
 ): Promise<boolean> {
   const parts = stored.split("$");
   if (parts.length !== 6 || parts[0] !== "scrypt") return false;
-  const [, n, r, p, saltB64, keyB64] = parts;
+  const [, nText, rText, pText, saltB64, keyB64] = parts;
+  const [n, r, p] = [Number(nText), Number(rText), Number(pText)];
+  // A corrupted or hand-edited hash must fail the login, not crash it (and
+  // must not make scrypt allocate unbounded memory).
+  const validParams =
+    Number.isInteger(n) && n > 1 && (n & (n - 1)) === 0 &&
+    Number.isInteger(r) && r >= 1 &&
+    Number.isInteger(p) && p >= 1 && p <= 16 &&
+    128 * n * r <= 64 * 1024 * 1024; // scrypt needs 128·N·r bytes of memory
   const expected = Buffer.from(keyB64, "base64");
-  if (expected.length === 0) return false;
-  const actual = await deriveKey(
-    password,
-    Buffer.from(saltB64, "base64"),
-    Number(n),
-    Number(r),
-    Number(p),
-    expected.length,
-  );
-  return timingSafeEqual(actual, expected);
+  if (!validParams || expected.length === 0 || expected.length > 256) return false;
+  try {
+    const actual = await deriveKey(
+      password,
+      Buffer.from(saltB64, "base64"),
+      n,
+      r,
+      p,
+      expected.length,
+    );
+    return timingSafeEqual(actual, expected);
+  } catch {
+    return false;
+  }
 }
 
 let dummyHash: Promise<string> | undefined;

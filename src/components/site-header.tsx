@@ -38,10 +38,11 @@ export function SiteHeader({ user }: { user: SessionUser | null }) {
             <>
               <Link
                 href="/dashboard"
+                aria-label="My account"
                 className="flex items-center gap-2 rounded-full py-1 pl-1 pr-3 text-sm font-medium text-ink hover:bg-surface-muted"
               >
                 <Avatar name={user.name} id={user.id} size="sm" />
-                <span className="hidden max-w-[10rem] truncate sm:inline">My account</span>
+                <span className="hidden sm:inline">My account</span>
               </Link>
               <form action={logout}>
                 <button type="submit" className={cx(buttonStyles.base, buttonStyles.ghost, "text-muted")}>

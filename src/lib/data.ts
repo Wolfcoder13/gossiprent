@@ -6,11 +6,12 @@ import {
   desc,
   eq,
   ilike,
-  or,
+  isNull,
   sql,
   type SQL,
 } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
+import { cache } from "react";
 import { getDb } from "@/db";
 import {
   properties,
@@ -35,6 +36,8 @@ export type PublicUser = {
   city: string | null;
   bio: string | null;
   createdAt: Date;
+  /** Set when the person closed their account (their profile and the reviews about them remain). */
+  deletedAt: Date | null;
 };
 
 export type RatingSummary = {
@@ -127,7 +130,21 @@ export function parseSort(value: string | string[] | undefined): PersonSort {
 
 /** A trimmed, length-limited search string from a search param. */
 export function parseQuery(value: string | string[] | undefined): string {
-  return (Array.isArray(value) ? value[0] : value)?.trim().slice(0, 100) ?? "";
+  const raw = Array.isArray(value) ? value[0] : value;
+  // Postgres rejects NUL characters in text, so drop them rather than erroring.
+  return raw?.replaceAll("\u0000", "").trim().slice(0, 100).trim() ?? "";
+}
+
+/**
+ * ILIKE patterns for each word of a search, so "Austin, TX" or "4521 Clark
+ * Chicago" match even though the words live in different columns.
+ */
+export function searchPatterns(query: string | undefined): string[] {
+  return (query ?? "")
+    .split(/[\s,]+/)
+    .filter(Boolean)
+    .slice(0, 8)
+    .map(likePattern);
 }
 
 function paginate<T>(items: T[], total: number, page: number, pageSize: number): Paginated<T> {
@@ -143,6 +160,7 @@ const publicUserColumns = {
   city: users.city,
   bio: users.bio,
   createdAt: users.createdAt,
+  deletedAt: users.deletedAt,
 };
 
 function targetCondition(target: ReviewTarget): SQL {
@@ -160,16 +178,19 @@ export function propertyLabel(p: { address: string; unit: string | null }): stri
 // People (landlords and renters)
 // ---------------------------------------------------------------------------
 
-export async function getPublicUser(id: string, role?: UserRole): Promise<PublicUser | null> {
-  if (!isUuid(id)) return null;
-  const db = await getDb();
-  const [user] = await db
-    .select(publicUserColumns)
-    .from(users)
-    .where(role ? and(eq(users.id, id), eq(users.role, role)) : eq(users.id, id))
-    .limit(1);
-  return user ?? null;
-}
+// Memoized per request: generateMetadata and the page both ask for the same row.
+export const getPublicUser = cache(
+  async (id: string, role?: UserRole): Promise<PublicUser | null> => {
+    if (!isUuid(id)) return null;
+    const db = await getDb();
+    const [user] = await db
+      .select(publicUserColumns)
+      .from(users)
+      .where(role ? and(eq(users.id, id), eq(users.role, role)) : eq(users.id, id))
+      .limit(1);
+    return user ?? null;
+  },
+);
 
 export async function listPeople(options: {
   role: UserRole;
@@ -181,17 +202,18 @@ export async function listPeople(options: {
   const { role, query, sort = "top", page = 1, pageSize = PAGE_SIZE } = options;
   const db = await getDb();
 
-  const pattern = query ? likePattern(query) : null;
+  const personText = sql`concat_ws(' ', ${users.name}, ${users.city})`;
   const where = and(
     eq(users.role, role),
-    pattern ? or(ilike(users.name, pattern), ilike(users.city, pattern)) : undefined,
+    ...searchPatterns(query).map((pattern) => ilike(personText, pattern)),
   );
 
+  const byName = [sql`lower(${users.name})`, asc(users.name)];
   const orderBy = {
-    top: [sql`avg(${reviews.rating}) desc nulls last`, desc(count(reviews.id)), asc(users.name)],
-    most: [desc(count(reviews.id)), sql`avg(${reviews.rating}) desc nulls last`, asc(users.name)],
+    top: [sql`avg(${reviews.rating}) desc nulls last`, desc(count(reviews.id)), ...byName],
+    most: [desc(count(reviews.id)), sql`avg(${reviews.rating}) desc nulls last`, ...byName],
     newest: [desc(users.createdAt)],
-    name: [asc(users.name)],
+    name: byName,
   }[sort];
 
   const [rows, [{ total }]] = await Promise.all([
@@ -234,26 +256,21 @@ export async function listProperties(options: {
   const { query, sort = "top", page = 1, pageSize = PAGE_SIZE, landlordId, createdById } = options;
   const db = await getDb();
 
-  const pattern = query ? likePattern(query) : null;
+  // Everything a renter might type: "1408 E 6th St, Unit 2B, Austin TX 78702", or the landlord.
+  const propertyText = sql`concat_ws(' ', ${properties.address}, 'Unit ' || ${properties.unit},
+    ${properties.city}, ${properties.region}, ${properties.postalCode}, ${landlordUser.name})`;
   const where = and(
     landlordId ? eq(properties.landlordId, landlordId) : undefined,
     createdById ? eq(properties.createdById, createdById) : undefined,
-    pattern
-      ? or(
-          ilike(properties.address, pattern),
-          ilike(properties.city, pattern),
-          ilike(properties.region, pattern),
-          ilike(properties.postalCode, pattern),
-          ilike(landlordUser.name, pattern),
-        )
-      : undefined,
+    ...searchPatterns(query).map((pattern) => ilike(propertyText, pattern)),
   );
 
+  const byAddress = [sql`lower(${properties.address})`, sql`lower(coalesce(${properties.unit}, ''))`];
   const orderBy = {
-    top: [sql`avg(${reviews.rating}) desc nulls last`, desc(count(reviews.id))],
-    most: [desc(count(reviews.id)), sql`avg(${reviews.rating}) desc nulls last`],
+    top: [sql`avg(${reviews.rating}) desc nulls last`, desc(count(reviews.id)), ...byAddress],
+    most: [desc(count(reviews.id)), sql`avg(${reviews.rating}) desc nulls last`, ...byAddress],
     newest: [desc(properties.createdAt)],
-    name: [asc(properties.address), asc(properties.unit)],
+    name: byAddress,
   }[sort];
 
   const [rows, [{ total }]] = await Promise.all([
@@ -294,7 +311,8 @@ export async function listProperties(options: {
   return paginate(items, total, page, pageSize);
 }
 
-export async function getProperty(id: string): Promise<PropertyDetail | null> {
+// Memoized per request: generateMetadata and the page both ask for the same row.
+export const getProperty = cache(async (id: string): Promise<PropertyDetail | null> => {
   if (!isUuid(id)) return null;
   const db = await getDb();
   const [row] = await db
@@ -321,7 +339,7 @@ export async function getProperty(id: string): Promise<PropertyDetail | null> {
     ...rest,
     landlord: landlordId && landlordName ? { id: landlordId, name: landlordName } : null,
   };
-}
+});
 
 /** An existing property at the same address (case-insensitive), if any. */
 export async function findPropertyByAddress(p: {
@@ -354,8 +372,8 @@ export async function listLandlordOptions(): Promise<
   return db
     .select({ id: users.id, name: users.name, city: users.city })
     .from(users)
-    .where(eq(users.role, "landlord"))
-    .orderBy(asc(users.name))
+    .where(and(eq(users.role, "landlord"), isNull(users.deletedAt)))
+    .orderBy(sql`lower(${users.name})`, asc(users.name))
     .limit(1000);
 }
 
@@ -459,16 +477,34 @@ export async function listReviewsAbout(
   return paginate(items, total, page, pageSize);
 }
 
-/** Reviews of any property this landlord manages. */
+/** The most recent reviews of any property this landlord manages, plus the total. */
 export async function listReviewsOfLandlordProperties(
   landlordId: string,
   limit = 50,
-): Promise<ReviewItem[]> {
-  return queryReviews({ where: eq(properties.landlordId, landlordId), limit });
+): Promise<{ items: ReviewItem[]; total: number }> {
+  const db = await getDb();
+  const [items, [{ total }]] = await Promise.all([
+    queryReviews({ where: eq(properties.landlordId, landlordId), limit }),
+    db
+      .select({ total: count() })
+      .from(reviews)
+      .innerJoin(properties, eq(properties.id, reviews.propertyId))
+      .where(eq(properties.landlordId, landlordId)),
+  ]);
+  return { items, total };
 }
 
-export async function listReviewsByAuthor(authorId: string, limit = 100): Promise<ReviewItem[]> {
-  return queryReviews({ where: eq(reviews.authorId, authorId), limit });
+/** The most recent reviews this person wrote, plus the total. */
+export async function listReviewsByAuthor(
+  authorId: string,
+  limit = 100,
+): Promise<{ items: ReviewItem[]; total: number }> {
+  const db = await getDb();
+  const [items, [{ total }]] = await Promise.all([
+    queryReviews({ where: eq(reviews.authorId, authorId), limit }),
+    db.select({ total: count() }).from(reviews).where(eq(reviews.authorId, authorId)),
+  ]);
+  return { items, total };
 }
 
 export async function listRecentReviews(limit = 6): Promise<ReviewItem[]> {

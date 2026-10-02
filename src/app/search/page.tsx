@@ -86,7 +86,7 @@ function SearchForm({ query }: { query: string }) {
         type="search"
         defaultValue={query}
         placeholder="Search a name, city, or address"
-        className="flex-1 rounded-full border border-line-strong bg-surface px-5 py-2.5 text-ink placeholder:text-muted/70 focus:border-brand focus:outline-none focus:ring-2 focus:ring-focus/40"
+        className="min-w-0 flex-1 rounded-full border border-line-input bg-surface px-5 py-2.5 text-ink placeholder:text-muted/70 focus:border-brand focus:outline-none focus:ring-2 focus:ring-focus/40"
       />
       <button type="submit" className="rounded-full bg-brand px-5 py-2.5 font-semibold text-brand-ink hover:bg-brand-hover">
         Search
