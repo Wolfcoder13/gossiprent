@@ -48,9 +48,11 @@ export function PropertyCard({ property }: { property: PropertyListItem }) {
             <path d="M10 20v-6h4v6" strokeLinejoin="round" />
           </svg>
         </span>
-        <div className="min-w-0">
-          <p className="font-semibold text-ink group-hover:underline">{propertyLabel(property)}</p>
-          <p className="text-sm text-muted">
+        <div className="min-w-0 flex-1">
+          <p className="font-semibold wrap-anywhere text-ink group-hover:underline">
+            {propertyLabel(property)}
+          </p>
+          <p className="text-sm wrap-anywhere text-muted">
             {property.city}, {property.region}
             {property.postalCode ? ` ${property.postalCode}` : ""}
           </p>
@@ -62,7 +64,7 @@ export function PropertyCard({ property }: { property: PropertyListItem }) {
       {property.description && (
         <p className="mt-3 line-clamp-2 text-sm text-ink/80">{property.description}</p>
       )}
-      <p className="mt-auto pt-4 text-xs text-muted">
+      <p className="mt-auto pt-4 text-xs wrap-anywhere text-muted">
         {property.landlord ? <>Landlord: {property.landlord.name}</> : "Landlord not on GossipRent yet"}
       </p>
     </Link>
@@ -70,5 +72,5 @@ export function PropertyCard({ property }: { property: PropertyListItem }) {
 }
 
 export function CardGrid({ children }: { children: ReactNode }) {
-  return <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{children}</ul>;
+  return <ul className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">{children}</ul>;
 }

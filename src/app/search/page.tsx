@@ -28,7 +28,7 @@ export default async function SearchPage({ searchParams }: PageProps<"/search">)
     listProperties({ query, pageSize: RESULTS_PER_GROUP }),
   ]);
   const total = landlords.total + renters.total + properties.total;
-  const q = encodeURIComponent(query);
+  const q = new URLSearchParams({ q: query }).toString();
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-10 sm:px-6">
@@ -47,21 +47,21 @@ export default async function SearchPage({ searchParams }: PageProps<"/search">)
         </div>
       ) : (
         <div className="mt-8 space-y-12">
-          <ResultGroup title="Landlords" total={landlords.total} moreHref={`/landlords?q=${q}`}>
+          <ResultGroup title="Landlords" total={landlords.total} moreHref={`/landlords?${q}`}>
             {landlords.items.map((p) => (
               <li key={p.id}>
                 <PersonCard person={p} />
               </li>
             ))}
           </ResultGroup>
-          <ResultGroup title="Properties" total={properties.total} moreHref={`/properties?q=${q}`}>
+          <ResultGroup title="Properties" total={properties.total} moreHref={`/properties?${q}`}>
             {properties.items.map((p) => (
               <li key={p.id}>
                 <PropertyCard property={p} />
               </li>
             ))}
           </ResultGroup>
-          <ResultGroup title="Renters" total={renters.total} moreHref={`/renters?q=${q}`}>
+          <ResultGroup title="Renters" total={renters.total} moreHref={`/renters?${q}`}>
             {renters.items.map((p) => (
               <li key={p.id}>
                 <PersonCard person={p} />
@@ -86,7 +86,7 @@ function SearchForm({ query }: { query: string }) {
         type="search"
         defaultValue={query}
         placeholder="Search a name, city, or address"
-        className="min-w-0 flex-1 rounded-full border border-line-input bg-surface px-5 py-2.5 text-ink placeholder:text-muted/70 focus:border-brand focus:outline-none focus:ring-2 focus:ring-focus/40"
+        className="min-w-0 flex-1 rounded-full border border-line-input bg-surface px-5 py-2.5 text-ink placeholder:text-muted focus:border-brand focus:outline-none focus:ring-2 focus:ring-focus/40"
       />
       <button type="submit" className="rounded-full bg-brand px-5 py-2.5 font-semibold text-brand-ink hover:bg-brand-hover">
         Search

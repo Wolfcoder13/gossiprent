@@ -1,10 +1,10 @@
 "use client";
 
-import { useActionState, useEffect, useRef } from "react";
+import { useActionState, useRef } from "react";
 import { saveReview } from "@/app/actions/reviews";
 import type { ReviewKind } from "@/db/schema";
 import { idleFormState } from "@/lib/validation";
-import { FormMessage, SubmitButton, TextArea, TextInput } from "./form";
+import { FormMessage, SubmitButton, TextArea, TextInput, useFocusAfterSubmit } from "./form";
 import { StarInput } from "./star-input";
 
 const PROMPTS: Record<ReviewKind, { title: string; body: string }> = {
@@ -45,18 +45,7 @@ export function ReviewForm({
   const message = state.status === "success" && !existing ? idleFormState : state;
 
   // The form re-mounts after each submission (see `key`), which drops focus.
-  // Put it on the first field that needs fixing, or on the success message.
-  useEffect(() => {
-    const form = formRef.current;
-    if (!form || state.status === "idle") return;
-    const target =
-      state.status === "error"
-        ? form.querySelector<HTMLElement>(
-            'fieldset[aria-invalid="true"] input, [aria-invalid="true"]:is(input, textarea)',
-          )
-        : form.querySelector<HTMLElement>('[role="status"]');
-    target?.focus();
-  }, [state]);
+  useFocusAfterSubmit(formRef, state);
 
   return (
     <form

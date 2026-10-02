@@ -1,8 +1,8 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useRef } from "react";
 import { updateProfile } from "@/app/actions/account";
-import { FormMessage, SubmitButton, TextArea, TextInput } from "@/components/form";
+import { FormMessage, SubmitButton, TextArea, TextInput, useFocusAfterSubmit } from "@/components/form";
 import { idleFormState } from "@/lib/validation";
 
 export function ProfileForm({
@@ -11,11 +11,13 @@ export function ProfileForm({
   user: { name: string; city: string | null; bio: string | null };
 }) {
   const [state, formAction] = useActionState(updateProfile, idleFormState);
+  const formRef = useRef<HTMLFormElement>(null);
+  useFocusAfterSubmit(formRef, state);
   const errors = state.fieldErrors ?? {};
   const values = state.values ?? { name: user.name, city: user.city ?? "", bio: user.bio ?? "" };
 
   return (
-    <form action={formAction} className="space-y-4" noValidate key={JSON.stringify(values)}>
+    <form ref={formRef} action={formAction} className="space-y-4" noValidate key={JSON.stringify(values)}>
       <FormMessage state={state} />
       <TextInput
         label="Name"

@@ -49,7 +49,7 @@ export function ReviewPanel({
   if (!viewer) {
     content = (
       <>
-        <h2 className="text-lg font-semibold text-ink">{invite}</h2>
+        <h2 className="text-lg font-semibold wrap-anywhere text-ink">{invite}</h2>
         <p className="mt-1 text-sm text-muted">
           Log in or create a free {reviewerRole} account to leave a star rating and a written review.
         </p>
@@ -75,7 +75,7 @@ export function ReviewPanel({
   } else {
     content = (
       <>
-        <h2 className="text-lg font-semibold text-ink">
+        <h2 className="text-lg font-semibold wrap-anywhere text-ink">
           {existing ? "Your review" : `Review ${subjectName}`}
         </h2>
         <p className="mt-1 text-sm text-muted">
@@ -97,8 +97,8 @@ export function ReviewPanel({
   }
 
   return (
-    <Card as="section" className="scroll-mt-24">
-      <div id="your-review" className="scroll-mt-24">
+    <Card as="section">
+      <div id="your-review" className="scroll-mt-36 sm:scroll-mt-24">
         {content}
       </div>
     </Card>

@@ -45,7 +45,7 @@ export function StarInput({
       aria-invalid={error?.length ? true : undefined}
     >
       <legend className="text-sm font-medium text-ink">{label}</legend>
-      <div className="mt-1.5 flex items-center gap-3">
+      <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
         <div className="flex" onMouseLeave={() => setHover(0)}>
           {[1, 2, 3, 4, 5].map((n) => (
             <label

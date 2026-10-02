@@ -1,8 +1,15 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useRef } from "react";
 import { createProperty } from "@/app/actions/properties";
-import { FormMessage, Select, SubmitButton, TextArea, TextInput } from "@/components/form";
+import {
+  FormMessage,
+  Select,
+  SubmitButton,
+  TextArea,
+  TextInput,
+  useFocusAfterSubmit,
+} from "@/components/form";
 import { idleFormState } from "@/lib/validation";
 
 export function PropertyForm({
@@ -13,11 +20,13 @@ export function PropertyForm({
   landlords: { id: string; name: string; city: string | null }[];
 }) {
   const [state, formAction] = useActionState(createProperty, idleFormState);
+  const formRef = useRef<HTMLFormElement>(null);
+  useFocusAfterSubmit(formRef, state);
   const errors = state.fieldErrors ?? {};
   const values = state.values ?? {};
 
   return (
-    <form action={formAction} className="space-y-5" noValidate key={JSON.stringify(values)}>
+    <form ref={formRef} action={formAction} className="space-y-5" noValidate key={JSON.stringify(values)}>
       <FormMessage state={state} />
       <div className="grid gap-5 sm:grid-cols-[minmax(0,1fr)_9rem]">
         <TextInput

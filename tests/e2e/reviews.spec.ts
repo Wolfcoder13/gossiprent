@@ -90,6 +90,8 @@ test.describe("renter reviews a landlord", () => {
     await expect(card.getByText("Renter", { exact: true })).toBeVisible();
     await expect(card.getByText("You", { exact: true })).toBeVisible();
     await expect(card.getByRole("img", { name: "Rated 4 out of 5 stars" })).toBeVisible();
+    // The rating is also written out as a number.
+    await expect(card.getByText("4/5", { exact: true })).toBeVisible();
     await expect(card.getByRole("button", { name: "Delete" })).toBeVisible();
 
     await expect(reviewsHeading(page, 1)).toBeVisible();
@@ -296,9 +298,9 @@ test.describe("renter reviews a landlord", () => {
     await landlord.context.close();
   });
 
-  // BUG: "Missing star rating shows a raw zod error". Submitting without picking a
-  // star shows "Invalid input: expected number, received NaN" under the stars.
-  test.fixme("submitting without a star rating asks you to pick one", async ({ page, browser }) => {
+  // Regression: submitting without a star used to show zod's raw
+  // "Invalid input: expected number, received NaN" under the stars.
+  test("submitting without a star rating asks you to pick one and keeps the typed text", async ({ page, browser }) => {
     const landlord = await createActor(browser, "landlord");
     await signUp(page, makeUser("renter"));
     await page.goto(landlord.profilePath);
@@ -308,43 +310,90 @@ test.describe("renter reviews a landlord", () => {
     await page.getByRole("button", { name: "Post review" }).click();
 
     await expect(formAlert(page)).toHaveText("Please fix the highlighted fields.");
-    await expect(page.getByRole("group", { name: "Your rating" })).toContainText(/pick a star rating/i);
-    await expect(page.getByText(/expected number|NaN/)).toHaveCount(0);
-    await expect(reviewTitleInput(page)).toHaveValue(review.title);
-    await expect(reviewBodyInput(page)).toHaveValue(review.body);
-    await landlord.context.close();
-  });
-
-  // BUG: "NUL characters in input crash the request (HTTP 500)" (form variant):
-  // a NUL character pasted into a review makes the insert fail and the page
-  // shows the error screen instead of saving or showing a validation message.
-  test.fixme("a review containing a NUL character is saved or rejected cleanly", async ({ page, browser }) => {
-    const landlord = await createActor(browser, "landlord");
-    await signUp(page, makeUser("renter"));
-    await page.goto(landlord.profilePath);
-    const review = makeReview(3, { body: "Pasted from a PDF:\u0000 the heating was broken all winter." });
-    await fillReview(page, review);
-    await page.getByRole("button", { name: "Post review" }).click();
-    await expect(formStatus(page).or(formAlert(page))).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Something went wrong" })).toHaveCount(0);
-    await landlord.context.close();
-  });
-
-  test("submitting without a star rating is rejected and keeps the typed text", async ({ page, browser }) => {
-    // The part of the scenario above that works today (the message itself is the bug).
-    const landlord = await createActor(browser, "landlord");
-    await signUp(page, makeUser("renter"));
-    await page.goto(landlord.profilePath);
-    const review = makeReview(1);
-    await reviewTitleInput(page).fill(review.title);
-    await reviewBodyInput(page).fill(review.body);
-    await page.getByRole("button", { name: "Post review" }).click();
-
-    await expect(formAlert(page)).toHaveText("Please fix the highlighted fields.");
-    await expect(page.getByRole("group", { name: "Your rating" })).toHaveAttribute("aria-invalid", "true");
+    const stars = page.getByRole("group", { name: "Your rating" });
+    await expect(stars).toHaveAttribute("aria-invalid", "true");
+    await expect(stars).toContainText("Pick a star rating from 1 to 5.");
+    await expect(stars).toHaveAccessibleDescription("Pick a star rating from 1 to 5.");
+    await expect(page.getByText(/expected number|NaN|Invalid input/)).toHaveCount(0);
     await expect(reviewTitleInput(page)).toHaveValue(review.title);
     await expect(reviewBodyInput(page)).toHaveValue(review.body);
     await expect(page.getByText(`No reviews for ${landlord.user.name} yet`)).toBeVisible();
+    // Focus moves to the stars so keyboard users can fix it straight away.
+    await expect(starRadio(page, 1)).toBeFocused();
+    await page.keyboard.press("ArrowRight");
+    await expect(starRadio(page, 2)).toBeChecked();
+    await page.getByRole("button", { name: "Post review" }).click();
+    await expect(formStatus(page)).toHaveText("Thanks! Your review is live.");
+    await expect(reviewCard(page, review.title).getByRole("img", { name: "Rated 2 out of 5 stars" })).toBeVisible();
+    await landlord.context.close();
+  });
+
+  // Regression: a NUL character pasted into a review used to make the insert
+  // fail with a 500 "Something went wrong" page. It's now silently dropped.
+  test("a review containing a NUL character is saved without it", async ({ page, browser }) => {
+    const landlord = await createActor(browser, "landlord");
+    await signUp(page, makeUser("renter"));
+    await page.goto(landlord.profilePath);
+    const id = uid();
+    const review = makeReview(3, {
+      title: `Nul\u0000 title ${id}`,
+      body: "Pasted from a PDF:\u0000 the heating was broken all winter.",
+    });
+    await fillReview(page, review);
+    await page.getByRole("button", { name: "Post review" }).click();
+    await expect(formStatus(page)).toHaveText("Thanks! Your review is live.");
+    await expect(page.getByRole("heading", { name: "Something went wrong" })).toHaveCount(0);
+    const card = reviewCard(page, `Nul title ${id}`);
+    await expect(card.getByRole("heading", { level: 3 })).toHaveText(`Nul title ${id}`);
+    await expect(card).toContainText("Pasted from a PDF: the heating was broken all winter.");
+    // The form holds the cleaned-up text too.
+    await expect(reviewTitleInput(page)).toHaveValue(`Nul title ${id}`);
+    await landlord.context.close();
+  });
+
+  test("a NUL character in other forms doesn't crash them either", async ({ page }) => {
+    const user = makeUser("renter");
+    await signUp(page, user);
+    await page.getByLabel("Bio").fill("Quiet\u0000 tenant");
+    await page.getByRole("button", { name: "Save profile" }).click();
+    await expect(formStatus(page)).toHaveText("Profile saved.");
+    await expect(page.getByLabel("Bio")).toHaveValue("Quiet tenant");
+
+    const property = makeProperty({ description: "Nul\u0000 description" });
+    await addProperty(page, property);
+    await expect(page.getByText("Nul description")).toBeVisible();
+
+    await page.getByRole("button", { name: "Log out" }).click();
+    await page.goto("/login");
+    await page.getByLabel("Email").fill(`${user.email}\u0000`);
+    await page.getByLabel("Password").fill(user.password);
+    await page.getByRole("button", { name: "Log in", exact: true }).click();
+    await expect(page).toHaveURL(/\/dashboard$/);
+  });
+
+  test("after a failed submit, focus moves to the first field to fix; after success, to the message", async ({
+    page,
+    browser,
+  }) => {
+    const landlord = await createActor(browser, "landlord");
+    await signUp(page, makeUser("renter"));
+    await page.goto(landlord.profilePath);
+    await pickStars(page, 4);
+    await reviewTitleInput(page).fill("ok");
+    await reviewBodyInput(page).fill("Too short.");
+    await page.getByRole("button", { name: "Post review" }).click();
+    await expect(page.getByText("Title must be at least 3 characters.")).toBeVisible();
+    await expect(reviewTitleInput(page)).toBeFocused();
+
+    await reviewTitleInput(page).fill("A proper headline");
+    await page.getByRole("button", { name: "Post review" }).click();
+    await expect(page.getByText("Your review must be at least 20 characters.")).toBeVisible();
+    await expect(reviewBodyInput(page)).toBeFocused();
+
+    await reviewBodyInput(page).fill("Long enough this time, and all of it true.");
+    await page.getByRole("button", { name: "Post review" }).click();
+    await expect(formStatus(page)).toHaveText("Thanks! Your review is live.");
+    await expect(formStatus(page)).toBeFocused();
     await landlord.context.close();
   });
 
@@ -667,5 +716,151 @@ test.describe("who can review whom", () => {
     await expect(page.getByRole("button", { name: "Post review" })).toHaveCount(0);
     await expect(page.getByRole("radio")).toHaveCount(0);
     await landlord.context.close();
+  });
+});
+
+test.describe("ratings on review cards", () => {
+  test("every card shows the rating as N/5 next to the stars", async ({ page }) => {
+    await page.goto("/");
+    const cards = page.getByRole("region", { name: "Latest reviews" }).locator("article");
+    await expect(cards).toHaveCount(6);
+    for (const card of await cards.all()) {
+      const label = await card.getByRole("img", { name: /^Rated [1-5] out of 5 stars$/ }).getAttribute("aria-label");
+      const stars = label!.match(/Rated (\d)/)![1];
+      await expect(card.getByText(`${stars}/5`, { exact: true })).toBeVisible();
+    }
+  });
+});
+
+test.describe("long text on a phone (390px wide)", () => {
+  test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+
+  test("a long URL or unbroken word in a review doesn't make the page scroll sideways", async ({ page, browser }) => {
+    const landlord = await createActor(browser, "landlord");
+    const renter = makeUser("renter");
+    await signUp(page, renter);
+    const id = uid();
+    const url = `https://example.com/${"very-long-path-segment-without-spaces".repeat(8)}?ref=${id}`;
+    const title = `Headline${"x".repeat(80)}${id}`.slice(0, 120);
+    await page.goto(landlord.profilePath);
+    await fillReview(page, { stars: 3, title, body: `See ${url} for the photos of the mold.` });
+    await page.getByRole("button", { name: "Post review" }).click();
+    await expect(formStatus(page)).toHaveText("Thanks! Your review is live.");
+    await expect(reviewCard(page, url)).toBeVisible();
+
+    for (const path of [landlord.profilePath, "/", "/dashboard"]) {
+      await page.goto(path);
+      await expect(reviewCard(page, url).first()).toBeVisible();
+      const scrollWidth = await page.evaluate(() => document.scrollingElement!.scrollWidth);
+      expect(scrollWidth, path).toBeLessThanOrEqual(390);
+      // The card itself fits on screen.
+      const box = await reviewCard(page, url).first().boundingBox();
+      expect(box!.x + box!.width, path).toBeLessThanOrEqual(390);
+    }
+    await landlord.page.goto("/dashboard");
+    await landlord.page.setViewportSize({ width: 390, height: 844 });
+    await expect(reviewCard(landlord.page, url)).toBeVisible();
+    expect(await landlord.page.evaluate(() => document.scrollingElement!.scrollWidth)).toBeLessThanOrEqual(390);
+    await landlord.context.close();
+  });
+
+  test("a long URL in a property description doesn't overflow the property page", async ({ page, browser }) => {
+    await signUp(page, makeUser("renter"));
+    const property = makeProperty({ description: `Photos: https://example.com/${"gallery-".repeat(25)}${uid()}` });
+    const path = await addProperty(page, property);
+    await page.goto(path);
+    await expect(page.getByText(property.description!)).toBeVisible();
+    expect(await page.evaluate(() => document.scrollingElement!.scrollWidth)).toBeLessThanOrEqual(390);
+
+    const visitor = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true });
+    const visitorPage = await visitor.newPage();
+    await visitorPage.goto(path);
+    await expect(visitorPage.getByText(property.description!)).toBeVisible();
+    expect(await visitorPage.evaluate(() => document.scrollingElement!.scrollWidth)).toBeLessThanOrEqual(390);
+    await visitor.close();
+  });
+
+  const LONG_TOWN = "Llanfairpwllgwyngyllgogerychwyrndrobwllllantysiliogogogoch";
+
+  async function pageWidth(page: Page): Promise<number> {
+    return page.evaluate(() => document.scrollingElement!.scrollWidth);
+  }
+
+  // Regression: a company name like "SunbeltPropertyManagementGroup", a real
+  // town such as "Llanfairpwllgwyngyllgogerychwyrndrobwllllantysiliogogogoch",
+  // or a long unbroken address token used to make pages scroll sideways.
+  test("a long single-word name, city, or address doesn't make pages scroll sideways", async ({ page, browser }) => {
+    const user = makeUser("landlord", { name: "SunbeltPropertyManagementGroup", city: LONG_TOWN });
+    await signUp(page, user);
+    const profile = await myProfilePath(page);
+    const property = makeProperty({ address: `${"Unbrokenstreetnamewithoutanyspaces".repeat(2)}${uid()}` });
+    const propertyPath = await addProperty(page, property);
+    const inLongTown = makeProperty({ city: LONG_TOWN, region: "Ynysmonanglesey" });
+    await addProperty(page, inLongTown);
+    const targets = [
+      profile,
+      "/dashboard",
+      propertyPath,
+      `/search?q=${encodeURIComponent(LONG_TOWN)}`,
+      `/search?q=${encodeURIComponent(property.address)}`,
+      `/search?q=${encodeURIComponent(inLongTown.address)}`,
+      // Directory cards with the long name, city, and address (short queries).
+      "/landlords?q=Sunbelt",
+      "/properties?q=Unbrokenstreetname",
+      `/properties?q=${encodeURIComponent(inLongTown.address)}`,
+    ];
+    for (const target of targets) {
+      await page.goto(target);
+      await expect(page.getByRole("heading", { level: 1 }).first(), target).toBeVisible();
+      expect(await pageWidth(page), target).toBeLessThanOrEqual(390);
+    }
+    // What a renter and a signed-out visitor see (the review panel's heading names the subject).
+    const renter = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true });
+    const renterPage = await renter.newPage();
+    await signUp(renterPage, makeUser("renter"));
+    const visitor = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true });
+    const visitorPage = await visitor.newPage();
+    for (const viewer of [renterPage, visitorPage]) {
+      for (const target of [profile, propertyPath]) {
+        await viewer.goto(target);
+        await expect(viewer.getByRole("heading", { level: 1 }).first(), target).toBeVisible();
+        expect(await pageWidth(viewer), target).toBeLessThanOrEqual(390);
+      }
+    }
+    await renter.close();
+    await visitor.close();
+  });
+
+  test("a long one-word search doesn't make the directories scroll sideways", async ({ page }) => {
+    const user = makeUser("landlord", { city: LONG_TOWN });
+    await signUp(page, user);
+    const property = makeProperty({ address: `${"Unbrokenstreetnamewithoutanyspaces".repeat(2)}${uid()}` });
+    await addProperty(page, property);
+    for (const target of [
+      `/landlords?q=${encodeURIComponent(LONG_TOWN)}`,
+      `/renters?q=${encodeURIComponent(LONG_TOWN)}`,
+      `/properties?q=${encodeURIComponent(property.address)}`,
+      `/properties?q=${encodeURIComponent("x".repeat(100))}`,
+    ]) {
+      await page.goto(target);
+      await expect(page.getByRole("heading", { level: 1 }).first(), target).toBeVisible();
+      expect(await pageWidth(page), target).toBeLessThanOrEqual(390);
+    }
+  });
+
+  test("a property in a town with a long single-word name doesn't overflow its page", async ({ page, browser }) => {
+    await signUp(page, makeUser("renter"));
+    const property = makeProperty({ city: LONG_TOWN, region: "Ynysmonanglesey" });
+    const path = await addProperty(page, property);
+    await page.goto(path);
+    await expect(page.getByText(LONG_TOWN).first()).toBeVisible();
+    expect(await pageWidth(page)).toBeLessThanOrEqual(390);
+
+    const visitor = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true });
+    const visitorPage = await visitor.newPage();
+    await visitorPage.goto(path);
+    await expect(visitorPage.getByText(LONG_TOWN).first()).toBeVisible();
+    expect(await pageWidth(visitorPage)).toBeLessThanOrEqual(390);
+    await visitor.close();
   });
 });

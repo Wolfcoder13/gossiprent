@@ -1,8 +1,8 @@
 "use client";
 
-import { useActionState, useId } from "react";
+import { useActionState, useId, useRef } from "react";
 import { signup } from "@/app/actions/auth";
-import { FormMessage, SubmitButton, TextInput } from "@/components/form";
+import { FormMessage, SubmitButton, TextInput, useFocusAfterSubmit } from "@/components/form";
 import { cx } from "@/components/ui";
 import { idleFormState } from "@/lib/validation";
 
@@ -27,13 +27,15 @@ export function SignupForm({
   defaultRole?: "landlord" | "renter";
 }) {
   const [state, formAction] = useActionState(signup, idleFormState);
+  const formRef = useRef<HTMLFormElement>(null);
+  useFocusAfterSubmit(formRef, state);
   const errors = state.fieldErrors ?? {};
   const values = state.values ?? {};
   const role = values.role ?? defaultRole;
   const roleErrorId = useId();
 
   return (
-    <form action={formAction} className="space-y-5" noValidate key={JSON.stringify(values)}>
+    <form ref={formRef} action={formAction} className="space-y-5" noValidate key={JSON.stringify(values)}>
       <input type="hidden" name="next" value={next} />
       <FormMessage state={state} />
 

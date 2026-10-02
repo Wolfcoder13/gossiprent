@@ -1,13 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useId, type ReactNode } from "react";
+import { useEffect, useId, type ReactNode, type RefObject } from "react";
 import { useFormStatus } from "react-dom";
 import type { FormState } from "@/lib/validation";
 import { buttonStyles, cx, Notice } from "./ui";
 
 const inputStyles =
-  "block w-full rounded-xl border border-line-input bg-surface px-3.5 py-2.5 text-ink placeholder:text-muted/70 shadow-xs transition-colors focus:border-brand focus:outline-none focus:ring-2 focus:ring-focus/40 aria-invalid:border-danger";
+  "block w-full rounded-xl border border-line-input bg-surface px-3.5 py-2.5 text-ink placeholder:text-muted shadow-xs transition-colors focus:border-brand focus:outline-none focus:ring-2 focus:ring-focus/40 aria-invalid:border-danger";
 
 type FieldProps = {
   label: string;
@@ -158,13 +158,38 @@ export function SubmitButton({
   return (
     <button
       type="submit"
-      disabled={pending}
+      // Not `disabled`: a disabled button loses keyboard focus mid-submit.
       aria-disabled={pending}
+      onClick={(event) => {
+        if (pending) event.preventDefault();
+      }}
       className={cx(buttonStyles.base, buttonStyles[variant], "px-5 py-2.5", className)}
     >
       {pending ? (pendingLabel ?? "Saving…") : children}
     </button>
   );
+}
+
+/**
+ * After a submission, move keyboard focus somewhere useful: the first invalid
+ * field, else the error or success message. Forms re-render (and often
+ * re-mount) after an action, which would otherwise drop focus to <body>.
+ */
+export function useFocusAfterSubmit(
+  formRef: RefObject<HTMLFormElement | null>,
+  state: FormState,
+): void {
+  useEffect(() => {
+    const form = formRef.current;
+    if (!form || state.status === "idle") return;
+    const target =
+      state.status === "error"
+        ? (form.querySelector<HTMLElement>(
+            'fieldset[aria-invalid="true"] input, [aria-invalid="true"]:is(input, textarea, select)',
+          ) ?? form.querySelector<HTMLElement>('[role="alert"]'))
+        : form.querySelector<HTMLElement>('[role="status"]');
+    target?.focus();
+  }, [formRef, state]);
 }
 
 /** Success or error banner for a form's last submission. */

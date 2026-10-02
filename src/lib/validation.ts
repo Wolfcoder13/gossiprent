@@ -46,10 +46,16 @@ export const profileSchema = z.object({
   bio: optionalText(500, "Bio"),
 });
 
-export const passwordChangeSchema = z.object({
-  currentPassword: z.string().min(1, "Enter your current password.").max(128),
-  newPassword: signupSchema.shape.password,
-});
+export const passwordChangeSchema = z
+  .object({
+    currentPassword: z.string().min(1, "Enter your current password.").max(128),
+    newPassword: signupSchema.shape.password,
+    confirmPassword: z.string().max(128, "Password must be 128 characters or fewer."),
+  })
+  .refine((data) => data.newPassword === data.confirmPassword, {
+    path: ["confirmPassword"],
+    message: "The new passwords don't match.",
+  });
 
 export const reviewSchema = z.object({
   kind: z.enum(["landlord", "renter", "property"]),

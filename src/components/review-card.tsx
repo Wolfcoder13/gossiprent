@@ -76,12 +76,13 @@ export function ReviewCard({
 
       {isMine && (
         <footer className="mt-4 flex items-center gap-2 border-t border-line pt-3">
-          <Link
+          {/* A plain anchor (not next/link) so keyboard focus moves to the form too. */}
+          <a
             href={editHref ?? `${subjectHref}#your-review`}
             className="rounded-full px-3 py-1 text-xs font-semibold text-brand hover:bg-brand-soft"
           >
             Edit
-          </Link>
+          </a>
           <DeleteReviewButton reviewId={review.id} />
         </footer>
       )}

@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import {
   DEMO,
   DEMO_PASSWORD,
@@ -286,7 +286,16 @@ test.describe("redirects through login", () => {
     await expect(page.getByRole("button", { name: "Post review" })).toBeVisible();
   });
 
-  for (const evil of ["//evil.example", "https://evil.example/", "/\\evil.example", "javascript:alert(1)"]) {
+  for (const evil of [
+    "//evil.example",
+    "https://evil.example/",
+    "/\\evil.example",
+    "javascript:alert(1)",
+    // Dot-segments that a browser resolves to "//evil.example".
+    "/.//evil.example",
+    "/a/..//evil.example",
+    "/%2e//evil.example",
+  ]) {
     test(`ignores an off-site ?next=${evil}`, async ({ page, baseURL }) => {
       await page.goto(`/login?next=${encodeURIComponent(evil)}`);
       await expect(page.locator('input[name="next"]')).toHaveValue("/dashboard");
@@ -294,4 +303,312 @@ test.describe("redirects through login", () => {
       await expect(page).toHaveURL(`${baseURL}/dashboard`);
     });
   }
+});
+
+test.describe("open redirect regressions", () => {
+  test("/login?next=/.//evil.example ends on this site after logging in", async ({ page, baseURL }) => {
+    await page.goto("/login?next=/.//evil.example");
+    await fillLogin(page, DEMO.renters.lena.email, DEMO_PASSWORD);
+    await expect(page).toHaveURL(`${baseURL}/dashboard`);
+    expect(new URL(page.url()).origin).toBe(new URL(baseURL!).origin);
+  });
+
+  test("a signed-in visitor sent to /login?next=/.//evil.example stays on this site", async ({ page, baseURL, request }) => {
+    await logIn(page, DEMO.renters.lena.email, DEMO_PASSWORD);
+    await page.goto("/login?next=/.//evil.example");
+    await expect(page).toHaveURL(`${baseURL}/dashboard`);
+
+    // The raw redirect never points off-site, whatever the encoding.
+    const cookies = await page.context().cookies();
+    const cookie = cookies.map((c) => `${c.name}=${c.value}`).join("; ");
+    for (const next of ["/.//evil.example", "/a/..//evil.example", "/%2e//evil.example", "/.%2F/evil.example"]) {
+      const response = await request.get(`/login?next=${encodeURIComponent(next)}`, {
+        headers: { cookie },
+        maxRedirects: 0,
+      });
+      expect(response.status(), next).toBe(307);
+      const location = response.headers()["location"];
+      expect(new URL(location, baseURL).origin, `${next} -> ${location}`).toBe(new URL(baseURL!).origin);
+      expect(location, next).not.toMatch(/^\/\//);
+    }
+  });
+
+  test("a tampered hidden next field is also checked by the server", async ({ page, baseURL }) => {
+    await page.goto("/login");
+    await page.locator('input[name="next"]').evaluate((input) => {
+      (input as HTMLInputElement).value = "/.//evil.example";
+    });
+    await fillLogin(page, DEMO.renters.lena.email, DEMO_PASSWORD);
+    await expect(page).toHaveURL(`${baseURL}/dashboard`);
+  });
+
+  test("signing up with ?next=/.//evil.example ends on this site", async ({ page, baseURL }) => {
+    await page.goto("/signup?next=/.//evil.example");
+    await expect(page.locator('input[name="next"]')).toHaveValue("/dashboard");
+    await expect(page.locator("main").getByRole("link", { name: "Log in" })).toHaveAttribute("href", "/login");
+    // Tamper with the hidden field as well, to reach the server-side check.
+    await page.locator('input[name="next"]').evaluate((input) => {
+      (input as HTMLInputElement).value = "/a/..//evil.example";
+    });
+    await fillSignup(page, makeUser("renter"));
+    await expect(page).toHaveURL(`${baseURL}/dashboard`);
+  });
+
+  test("a non-ASCII return path works instead of crashing", async ({ page, baseURL }) => {
+    const next = "/search?q=café";
+    const response = await page.goto(`/login?next=${encodeURIComponent(next)}`);
+    expect(response?.status()).toBe(200);
+    await fillLogin(page, DEMO.renters.lena.email, DEMO_PASSWORD);
+    await expect(page).toHaveURL(`${baseURL}/search?q=caf%C3%A9`);
+    await expect(page.getByRole("heading", { level: 1, name: "Results for “café”" })).toBeVisible();
+
+    // Signed in already: the server-side redirect is a valid, encoded Location.
+    const again = await page.goto(`/login?next=${encodeURIComponent("/search?q=東京")}`);
+    expect(again?.status()).toBe(200);
+    await expect(page).toHaveURL(`${baseURL}/search?q=%E6%9D%B1%E4%BA%AC`);
+  });
+
+  test("dot segments inside this site still work as a return path", async ({ page, baseURL }) => {
+    await page.goto(`/login?next=${encodeURIComponent("/landlords/../renters")}`);
+    await expect(page.locator('input[name="next"]')).toHaveValue("/renters");
+    await fillLogin(page, DEMO.renters.lena.email, DEMO_PASSWORD);
+    await expect(page).toHaveURL(`${baseURL}/renters`);
+  });
+});
+
+test.describe("changing your password", () => {
+  async function passwordSection(page: Page) {
+    return page.locator("section").filter({ has: page.getByRole("heading", { name: "Password & sessions" }) });
+  }
+
+  /** The three password fields ("New password" alone would also match "Confirm new password"). */
+  function passwordFields(section: Locator) {
+    return {
+      current: section.getByLabel("Current password", { exact: true }),
+      next: section.getByLabel("New password", { exact: true }),
+      confirm: section.getByLabel("Confirm new password", { exact: true }),
+    };
+  }
+
+  test("a wrong current password is rejected and the old password keeps working", async ({ page }) => {
+    const user = makeUser("renter");
+    await signUp(page, user);
+    const section = await passwordSection(page);
+    const fields = passwordFields(section);
+    await expect(section).toContainText("Changing your password signs you out everywhere else.");
+    await fields.current.fill("not-my-password");
+    await fields.next.fill("brand-new-password");
+    await fields.confirm.fill("brand-new-password");
+    await section.getByRole("button", { name: "Change password" }).click();
+    await expect(section.getByRole("alert")).toHaveText("Please fix the highlighted fields.");
+    await expect(section.getByText("That isn't your current password.")).toBeVisible();
+    await expect(fields.current).toHaveAttribute("aria-invalid", "true");
+    await expect(fields.current).toHaveAccessibleDescription("That isn't your current password.");
+    await expect(fields.current).toBeFocused();
+
+    await logOut(page);
+    await logIn(page, user.email, user.password);
+    await logOut(page);
+    await page.goto("/login");
+    await fillLogin(page, user.email, "brand-new-password");
+    await expect(formAlert(page)).toHaveText("That email and password don't match an account.");
+  });
+
+  test("validates the new password", async ({ page }) => {
+    const user = makeUser("landlord");
+    await signUp(page, user);
+    const section = await passwordSection(page);
+    const fields = passwordFields(section);
+    await expect(fields.confirm).toHaveAttribute("type", "password");
+    await expect(fields.confirm).toHaveAttribute("autocomplete", "new-password");
+    await section.getByRole("button", { name: "Change password" }).click();
+    await expect(section.getByText("Enter your current password.")).toBeVisible();
+    await expect(section.getByText("Password must be at least 8 characters.")).toBeVisible();
+    await fields.current.fill(user.password);
+    await fields.next.fill("short");
+    await fields.confirm.fill("short");
+    await section.getByRole("button", { name: "Change password" }).click();
+    await expect(section.getByText("Password must be at least 8 characters.")).toBeVisible();
+    await expect(section.getByText("Enter your current password.")).toHaveCount(0);
+    await expect(section.getByText("The new passwords don't match.")).toHaveCount(0);
+    await expect(fields.next).toBeFocused();
+    // Passwords are never put back into the form.
+    await expect(fields.current).toHaveValue("");
+    await expect(fields.next).toHaveValue("");
+    await expect(fields.confirm).toHaveValue("");
+  });
+
+  test("a confirmation that doesn't match is rejected and the old password keeps working", async ({ page }) => {
+    const user = makeUser("renter");
+    await signUp(page, user);
+    const section = await passwordSection(page);
+    const fields = passwordFields(section);
+    await fields.current.fill(user.password);
+    await fields.next.fill("brand-new-password");
+    await fields.confirm.fill("brand-new-passwrod");
+    await section.getByRole("button", { name: "Change password" }).click();
+    await expect(section.getByRole("alert")).toHaveText("Please fix the highlighted fields.");
+    await expect(fields.confirm).toHaveAttribute("aria-invalid", "true");
+    await expect(fields.confirm).toHaveAccessibleDescription("The new passwords don't match.");
+    await expect(fields.confirm).toBeFocused();
+    // Only the confirmation is flagged.
+    await expect(fields.current).not.toHaveAttribute("aria-invalid", "true");
+    await expect(fields.next).not.toHaveAttribute("aria-invalid", "true");
+    await expect(section.getByText("That isn't your current password.")).toHaveCount(0);
+    await expect(fields.confirm).toHaveValue("");
+
+    // Nothing changed.
+    await logOut(page);
+    await logIn(page, user.email, user.password);
+    await logOut(page);
+    await page.goto("/login");
+    await fillLogin(page, user.email, "brand-new-password");
+    await expect(formAlert(page)).toHaveText("That email and password don't match an account.");
+  });
+
+  test("success: new password works, old one doesn't, and other sessions are signed out", async ({ page, browser }) => {
+    const user = makeUser("renter");
+    await signUp(page, user);
+    // The same account, signed in on another device.
+    const other = await browser.newContext();
+    const otherPage = await other.newPage();
+    await logIn(otherPage, user.email, user.password);
+    // And someone else entirely, who must stay signed in.
+    const bystander = await browser.newContext();
+    const bystanderPage = await bystander.newPage();
+    await logIn(bystanderPage, DEMO.renters.tom.email, DEMO_PASSWORD);
+
+    const newPassword = `changed-${uid()}`;
+    await page.goto("/dashboard");
+    const section = await passwordSection(page);
+    const fields = passwordFields(section);
+    await fields.current.fill(user.password);
+    await fields.next.fill(newPassword);
+    await fields.confirm.fill(newPassword);
+    await section.getByRole("button", { name: "Change password" }).click();
+    const status = section.getByRole("status");
+    await expect(status).toHaveText("Password changed. You've been signed out on your other devices.");
+    await expect(status).toBeFocused();
+    await expect(fields.current).toHaveValue("");
+    await expect(fields.confirm).toHaveValue("");
+
+    // This browser stays signed in.
+    await page.reload();
+    await expect(page.getByRole("heading", { level: 1, name: `Hi, ${user.name.split(" ")[0]}` })).toBeVisible();
+    // The other device is signed out.
+    await otherPage.goto("/dashboard");
+    await expect(otherPage).toHaveURL(/\/login\?next=%2Fdashboard$/);
+    await bystanderPage.goto("/dashboard");
+    await expect(bystanderPage.getByRole("heading", { level: 1, name: "Hi, Tom" })).toBeVisible();
+
+    // Old password no longer works; the new one does (also with odd email casing).
+    await fillLogin(otherPage, user.email, user.password);
+    await expect(formAlert(otherPage)).toHaveText("That email and password don't match an account.");
+    await fillLogin(otherPage, user.email.toUpperCase(), newPassword);
+    await expect(otherPage).toHaveURL(/\/dashboard$/);
+    await other.close();
+    await bystander.close();
+  });
+});
+
+test.describe("signing out other devices", () => {
+  const SIGNED_OUT = "You've been signed out on all your other devices.";
+
+  function signOutSection(page: Page): Locator {
+    return page.locator("form").filter({ has: page.getByRole("button", { name: "Sign out other devices" }) });
+  }
+
+  test("ends every other session for the account and keeps this one", async ({ page, browser }) => {
+    const user = makeUser("landlord");
+    await signUp(page, user);
+    const devices = await Promise.all([browser.newContext(), browser.newContext()]);
+    const devicePages = [];
+    for (const device of devices) {
+      const devicePage = await device.newPage();
+      await logIn(devicePage, user.email, user.password);
+      devicePages.push(devicePage);
+    }
+    const bystander = await browser.newContext();
+    const bystanderPage = await bystander.newPage();
+    await logIn(bystanderPage, DEMO.landlords.priya.email, DEMO_PASSWORD);
+
+    await page.goto("/dashboard");
+    await page.getByRole("button", { name: "Sign out other devices" }).click();
+    // The message shows right by the button, without leaving the page.
+    const status = signOutSection(page).getByRole("status");
+    await expect(status).toHaveText(SIGNED_OUT);
+    await expect(status).toBeFocused();
+    await expect(page).toHaveURL(/\/dashboard$/);
+    // It's the only message on the page (the password form has none).
+    await expect(page.getByRole("main").getByRole("status")).toHaveCount(1);
+    await page.reload();
+    await expect(page.getByRole("heading", { level: 1, name: `Hi, ${user.name.split(" ")[0]}` })).toBeVisible();
+    // A one-off message: it's gone after a reload.
+    await expect(page.getByText(SIGNED_OUT)).toHaveCount(0);
+
+    for (const devicePage of devicePages) {
+      await devicePage.goto("/dashboard");
+      await expect(devicePage).toHaveURL(/\/login\?next=%2Fdashboard$/);
+    }
+    await bystanderPage.goto("/dashboard");
+    await expect(bystanderPage.getByRole("heading", { level: 1, name: "Hi, Priya" })).toBeVisible();
+
+    // The password didn't change: the other devices can sign in again.
+    await fillLogin(devicePages[0], user.email, user.password);
+    await expect(devicePages[0]).toHaveURL(/\/dashboard$/);
+    for (const context of [...devices, bystander]) await context.close();
+  });
+
+  test("the old ?signedOut=others link no longer shows a message", async ({ page }) => {
+    await signUp(page, makeUser("renter"));
+    await page.goto("/dashboard?signedOut=others");
+    await expect(page.getByRole("heading", { level: 1, name: /^Hi, / })).toBeVisible();
+    await expect(page.getByText(SIGNED_OUT)).toHaveCount(0);
+  });
+
+  test("works without JavaScript", async ({ browser }) => {
+    const user = makeUser("renter");
+    const context = await browser.newContext({ javaScriptEnabled: false });
+    const page = await context.newPage();
+    const other = await browser.newContext();
+    const otherPage = await other.newPage();
+    await page.goto("/signup");
+    await page.locator("label", { hasText: "I'm a renter" }).click();
+    await page.getByLabel("Name", { exact: true }).fill(user.name);
+    await page.getByLabel("Email").fill(user.email);
+    await page.getByLabel("Password").fill(user.password);
+    await page.getByRole("button", { name: "Create account" }).click();
+    await expect(page).toHaveURL(/\/dashboard$/);
+    await logIn(otherPage, user.email, user.password);
+
+    await page.getByRole("button", { name: "Sign out other devices" }).click();
+    await expect(signOutSection(page).getByRole("status")).toHaveText(SIGNED_OUT);
+    await expect(page).toHaveURL(/\/dashboard$/);
+    await otherPage.goto("/dashboard");
+    await expect(otherPage).toHaveURL(/\/login\?next=%2Fdashboard$/);
+    await context.close();
+    await other.close();
+  });
+
+  test("a stale tab of a signed-out device is asked to log in again", async ({ page, browser }) => {
+    const user = makeUser("renter");
+    await signUp(page, user);
+    const other = await browser.newContext();
+    const otherPage = await other.newPage();
+    await logIn(otherPage, user.email, user.password);
+    // Signed out remotely while this tab still shows the dashboard.
+    await page.getByRole("button", { name: "Sign out other devices" }).click();
+    await expect(signOutSection(page).getByRole("status")).toHaveText(SIGNED_OUT);
+    // Its next action finds no session.
+    await otherPage.getByRole("button", { name: "Sign out other devices" }).click();
+    const alert = signOutSection(otherPage).getByRole("alert");
+    await expect(alert).toHaveText("Please log in again.");
+    await expect(alert).toBeFocused();
+    await otherPage.reload();
+    await expect(otherPage).toHaveURL(/\/login\?next=%2Fdashboard$/);
+    // The signed-in tab is unaffected.
+    await page.reload();
+    await expect(page.getByRole("heading", { level: 1, name: `Hi, ${user.name.split(" ")[0]}` })).toBeVisible();
+    await other.close();
+  });
 });

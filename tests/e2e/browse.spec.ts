@@ -1,5 +1,16 @@
 import { expect, test, type Page } from "@playwright/test";
-import { DEMO, findPersonPath, findPropertyPath, makeUser, signUp } from "./helpers";
+import {
+  addProperty,
+  DEMO,
+  DEMO_PASSWORD,
+  findPersonPath,
+  findPropertyPath,
+  logIn,
+  makeUser,
+  myProfilePath,
+  signUp,
+  uid,
+} from "./helpers";
 
 /** The number shown in one of the home page's stat tiles. */
 async function homeStat(page: Page, label: string): Promise<number> {
@@ -247,15 +258,69 @@ test.describe("search", () => {
     }
   });
 
-  // BUG: "NUL characters in input crash the request (HTTP 500)". Postgres can't
-  // store or compare "\u0000", so a query containing it throws in the database
-  // driver and every search/directory page answers 500 "Something went wrong".
-  test.fixme("a query containing a NUL character doesn't crash search or the directories", async ({ page }) => {
+  // Regression: Postgres can't store or compare "\u0000", so a query containing
+  // it used to crash every search/directory page with a 500.
+  test("a query containing a NUL character doesn't crash search or the directories", async ({ page }) => {
     for (const path of ["/search?q=%00", "/search?q=abc%00", "/landlords?q=%00", "/renters?q=a%00b", "/properties?q=%00"]) {
       const response = await page.goto(path);
-      expect(response?.status(), path).toBeLessThan(500);
+      expect(response?.status(), path).toBe(200);
       await expect(page.getByRole("heading", { name: "Something went wrong" }), path).toHaveCount(0);
     }
+    // The NUL is simply dropped: "Whit\0field" searches for "Whitfield".
+    await page.goto("/search?q=Whit%00field");
+    await expect(page.getByRole("heading", { level: 1, name: "Results for “Whitfield”" })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Landlords" }).getByRole("link", { name: /Sam Whitfield/ })).toBeVisible();
+    // A query that's nothing but NULs is an empty search.
+    await page.goto("/search?q=%00%00");
+    await expect(page.getByRole("heading", { level: 1, name: "Search" })).toBeVisible();
+  });
+
+  test("words are matched across fields: “Austin, TX” finds people and places in Austin", async ({ page }) => {
+    await page.goto(`/search?q=${encodeURIComponent("Austin, TX")}`);
+    await expect(page.getByRole("heading", { level: 1, name: "Results for “Austin, TX”" })).toBeVisible();
+    const landlords = page.getByRole("region", { name: "Landlords" });
+    await expect(landlords.getByRole("link", { name: /Maria Gonzalez/ })).toBeVisible();
+    const renters = page.getByRole("region", { name: "Renters" });
+    await expect(renters.getByRole("link", { name: /Jordan Ellis/ })).toBeVisible();
+    // Property city ("Austin") and region ("TX") are separate columns.
+    const properties = page.getByRole("region", { name: "Properties" });
+    await expect(properties.getByRole("heading", { name: "Properties (2)" })).toBeVisible();
+    await expect(properties.getByRole("link", { name: /1408 E 6th St, Unit 2B/ })).toBeVisible();
+    await expect(properties.getByRole("link", { name: /2210 Riverside Dr/ })).toBeVisible();
+
+    await page.goto(`/properties?q=${encodeURIComponent("Austin, TX")}`);
+    await expect(page.getByText("2 properties matching “Austin, TX”")).toBeVisible();
+    await page.goto(`/properties?q=${encodeURIComponent("Austin TX 78741")}`);
+    await expect(page.getByText("1 property matching “Austin TX 78741”")).toBeVisible();
+    await expect(page.getByRole("link", { name: /2210 Riverside Dr/ })).toBeVisible();
+
+    // Every word has to match somewhere.
+    await page.goto(`/properties?q=${encodeURIComponent("Austin, IL")}`);
+    await expect(page.getByText("0 properties matching “Austin, IL”")).toBeVisible();
+    // Name and city together.
+    await page.goto(`/landlords?q=${encodeURIComponent("Maria Austin")}`);
+    await expect(page.getByText("1 landlord matching “Maria Austin”")).toBeVisible();
+    await page.goto(`/renters?q=${encodeURIComponent("Chicago, IL")}`);
+    await expect(page.getByText("2 renters matching “Chicago, IL”")).toBeVisible();
+  });
+
+  test("a full property label, unit included, finds that property", async ({ page }) => {
+    for (const [query, label] of [
+      ["1408 E 6th St, Unit 2B", "1408 E 6th St, Unit 2B"],
+      ["4521 N Clark St, Unit 3, Chicago", "4521 N Clark St, Unit 3"],
+      ["77 Larimer St Unit 504 Denver CO 80205", "77 Larimer St, Unit 504"],
+      ["980 W Belmont Ave, Unit 12, Chicago, IL 60657", "980 W Belmont Ave, Unit 12"],
+    ]) {
+      await page.goto(`/properties?q=${encodeURIComponent(query)}`);
+      await expect(page.getByText(`1 property matching “${query}”`), query).toBeVisible();
+      await expect(page.getByRole("link", { name: new RegExp(label) }), query).toBeVisible();
+    }
+    // The landlord's name works alongside the address.
+    await page.goto(`/properties?q=${encodeURIComponent("Clark Northgate")}`);
+    await expect(page.getByText("1 property matching “Clark Northgate”")).toBeVisible();
+    // The home page search does the same.
+    await page.goto(`/search?q=${encodeURIComponent("1408 E 6th St, Unit 2B")}`);
+    await expect(page.getByRole("region", { name: "Properties" }).getByRole("heading", { name: "Properties (1)" })).toBeVisible();
   });
 
   test("an empty search shows just the search form", async ({ page }) => {
@@ -263,6 +328,65 @@ test.describe("search", () => {
     await expect(page.getByRole("heading", { level: 1, name: "Search" })).toBeVisible();
     await expect(page.getByRole("searchbox")).toHaveValue("");
     await expect(page.getByText(/matches?$/)).toHaveCount(0);
+  });
+
+  test("a punctuation-only search (“,”) shows the empty search page, not every result", async ({ page }) => {
+    for (const q of ["%2C", "%20%2C%20%2C%2C%20", "%2C%0A%09"]) {
+      await page.goto(`/search?q=${q}`);
+      await expect(page.getByRole("heading", { level: 1, name: "Search" }), q).toBeVisible();
+      await expect(page.getByRole("searchbox"), q).toHaveValue("");
+      await expect(page.getByText(/matches?$/), q).toHaveCount(0);
+      await expect(page.getByRole("heading", { name: /^Results for/ }), q).toHaveCount(0);
+      await expect(page.getByRole("region", { name: "Landlords" }), q).toHaveCount(0);
+    }
+  });
+
+  test("a punctuation-only filter on a directory is ignored", async ({ page }) => {
+    const all = await directoryTotal(page, "/landlords", /^\d[\d,]* landlords?\b/);
+    await page.goto("/landlords?q=%2C");
+    await expect(page.getByText(/matching “/)).toHaveCount(0);
+    expect(await directoryTotal(page, "/landlords?q=%2C", /^\d[\d,]* landlords?\b/)).toBe(all);
+    await page.goto("/properties?q=%2C%2C");
+    await expect(page.getByText(/matching “/)).toHaveCount(0);
+  });
+
+  test("a search of more than 100 characters is cut without leaving half an emoji", async ({ page }) => {
+    const query = `${"x".repeat(99)}😀`;
+    const response = await page.goto(`/search?q=${encodeURIComponent(query)}`);
+    expect(response?.status()).toBe(200);
+    const shown = await page.getByRole("searchbox").inputValue();
+    expect(shown.startsWith("x".repeat(99))).toBe(true);
+    expect(shown.isWellFormed()).toBe(true);
+    await expect(page.getByText("Nothing matched your search")).toBeVisible();
+  });
+
+  test("repeating a word doesn't change the results", async ({ page }) => {
+    await page.goto(`/landlords?q=${encodeURIComponent("whitfield WHITFIELD Whitfield")}`);
+    await expect(page.getByText("1 landlord matching “whitfield WHITFIELD Whitfield”")).toBeVisible();
+    // Repeats don't use up the 8-word limit either: a word after 10 repeats still counts.
+    const query = `${"a ".repeat(10)}Whitfield`;
+    await page.goto(`/landlords?q=${encodeURIComponent(query)}`);
+    await expect(page.getByRole("link", { name: /Sam Whitfield/ })).toBeVisible();
+    await expect(page.getByText(/^1 landlord matching/)).toBeVisible();
+  });
+
+  test("names and places with Greek or Turkish capitals can be found as typed", async ({ page }) => {
+    await signUp(page, makeUser("renter"));
+    const token = `U${uid()}`;
+    const greek = `${token} ΟΔΟΣ ΕΡΜΟΥ`;
+    const turkish = `${token} İstiklal Caddesi`;
+    for (const address of [greek, turkish]) {
+      await addProperty(page, { address, city: "İstanbul", region: "TR" });
+    }
+    for (const [query, count] of [
+      [`${token} ΟΔΟΣ`, 1],
+      [`${token} İstiklal`, 1],
+      [`${token} İstanbul`, 2],
+      [`${token} ΕΡΜΟΥ`, 1],
+    ] as const) {
+      await page.goto(`/properties?q=${encodeURIComponent(query)}`);
+      await expect(page.getByText(new RegExp(`^${count} propert(y|ies) matching`)), query).toBeVisible();
+    }
   });
 });
 
@@ -426,23 +550,167 @@ test.describe("without JavaScript", () => {
 });
 
 test.describe("pagination", () => {
-  // BUG: "Out-of-range ?page= claims the list is empty". A page number past the
-  // last page (an old link, or after deletions) shows "N landlords" next to
-  // "No landlords yet", with no pagination link back to page 1.
-  test.fixme("an out-of-range directory page doesn't claim there are no landlords", async ({ page }) => {
+  // Regression: a page number past the last page (an old link, or after
+  // deletions) used to show "N landlords" next to "No landlords yet". It now
+  // redirects to the last page that exists.
+  test("an out-of-range directory page redirects to the last page", async ({ page, request }) => {
+    const response = await request.get("/landlords?page=999", { maxRedirects: 0 });
+    expect(response.status()).toBe(307);
+    expect(response.headers()["location"]).toMatch(/^\/landlords(\?page=\d+)?$/);
+
     await page.goto("/landlords?page=999");
+    await expect(page).toHaveURL(/\/landlords(\?page=\d+)?$/);
     await expect(page.getByText(/^\d+ landlords$/)).toBeVisible();
     await expect(page.getByText("No landlords yet")).toHaveCount(0);
-    await expect(
-      page.locator("main ul > li > a").first().or(page.getByRole("link", { name: "← Previous" })),
-    ).toBeVisible();
+    await expect(page.locator("main ul > li > a").first()).toBeVisible();
   });
 
-  // BUG: "Out-of-range ?page= claims the list is empty" (profile reviews variant).
-  test.fixme("an out-of-range review page doesn't claim there are no reviews", async ({ page }) => {
-    await page.goto(await findPersonPath(page, "landlord", "Northgate Property Group"));
-    await page.goto(`${new URL(page.url()).pathname}?page=99`);
+  test("the redirect keeps the search and sort", async ({ request }) => {
+    const response = await request.get("/properties?q=Austin&sort=name&page=7", { maxRedirects: 0 });
+    expect(response.status()).toBe(307);
+    expect(response.headers()["location"]).toBe("/properties?q=Austin&sort=name");
+
+    const renters = await request.get("/renters?q=Chicago&sort=newest&page=2", { maxRedirects: 0 });
+    expect(renters.status()).toBe(307);
+    expect(renters.headers()["location"]).toBe("/renters?q=Chicago&sort=newest");
+  });
+
+  test("a search with no results doesn't redirect, whatever the page", async ({ page }) => {
+    const response = await page.goto("/landlords?q=zzz-no-such-landlord&page=5");
+    expect(response?.status()).toBe(200);
+    await expect(page).toHaveURL(/page=5$/);
+    await expect(page.getByText("No landlords match “zzz-no-such-landlord”")).toBeVisible();
+  });
+
+  test("an out-of-range review page redirects to the last page of reviews", async ({ page, request }) => {
+    const path = await findPersonPath(page, "landlord", "Northgate Property Group");
+    const response = await request.get(`${path}?page=99`, { maxRedirects: 0 });
+    expect(response.status()).toBe(307);
+    expect(response.headers()["location"]).toBe(`${path}#reviews`);
+
+    await page.goto(`${path}?page=99`);
+    await expect(page).toHaveURL(`${path}#reviews`);
     await expect(page.getByRole("heading", { name: "Reviews (2)" })).toBeVisible();
     await expect(page.getByText("No reviews for Northgate Property Group yet")).toHaveCount(0);
+    await expect(page.locator("article")).toHaveCount(2);
+  });
+
+  test("an out-of-range property review page redirects too", async ({ page, request }) => {
+    const path = await findPropertyPath(page, "78702", "1408 E 6th St, Unit 2B");
+    const response = await request.get(`${path}?page=3`, { maxRedirects: 0 });
+    expect(response.status()).toBe(307);
+    expect(response.headers()["location"]).toBe(`${path}#reviews`);
+    await page.goto(`${path}?page=3`);
+    await expect(page.getByRole("heading", { name: "Reviews (1)" })).toBeVisible();
+  });
+});
+
+test.describe("A–Z sorting", () => {
+  test("people are sorted by name ignoring case", async ({ browser, page }) => {
+    const token = `Sortcase${uid()}`;
+    // Created out of order, with mixed-case names.
+    for (const first of ["delta", "Bravo", "alpha", "Charlie"]) {
+      const context = await browser.newContext();
+      await signUp(await context.newPage(), makeUser("renter", { name: `${first} ${token}` }));
+      await context.close();
+    }
+    await page.goto(`/renters?q=${token}&sort=name`);
+    await expect(page.getByText(`4 renters matching “${token}”`)).toBeVisible();
+    // Byte order would put "Bravo" and "Charlie" before "alpha".
+    expect(await cardNames(page)).toEqual([`alpha ${token}`, `Bravo ${token}`, `Charlie ${token}`, `delta ${token}`]);
+  });
+
+  test("properties are sorted by address ignoring case", async ({ page }) => {
+    const token = `Sortprop${uid()}`;
+    await signUp(page, makeUser("renter"));
+    for (const street of ["delta", "Bravo", "alpha", "Charlie"]) {
+      await addProperty(page, { address: `${street} ${token} Rd`, city: "Sortville", region: "SV" });
+    }
+    await page.goto(`/properties?q=${token}&sort=name`);
+    await expect(page.getByText(`4 properties matching “${token}”`)).toBeVisible();
+    const labels = await page
+      .locator("main ul > li > a")
+      .evaluateAll((links) => links.map((a) => a.querySelector("p")?.textContent?.trim() ?? ""));
+    expect(labels).toEqual([`alpha ${token} Rd`, `Bravo ${token} Rd`, `Charlie ${token} Rd`, `delta ${token} Rd`]);
+  });
+});
+
+test.describe("on a phone (390px wide)", () => {
+  test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+
+  /** Whether the page can scroll sideways. */
+  async function horizontalOverflow(page: Page): Promise<number> {
+    return page.evaluate(() => document.scrollingElement!.scrollWidth - window.innerWidth);
+  }
+
+  test("a profile has a “Review <name>” button that jumps to the review form", async ({ page }) => {
+    const path = await findPersonPath(page, "landlord", "Sam Whitfield");
+    await page.goto(path);
+    const cta = page.getByRole("link", { name: "Review Sam Whitfield", exact: true });
+    await expect(cta).toBeVisible();
+    await expect(cta).toHaveAttribute("href", "#your-review");
+    // The form box starts below the fold on a phone.
+    await expect(page.locator("#your-review")).not.toBeInViewport();
+    await cta.click();
+    await expect(page).toHaveURL(`${path}#your-review`);
+    await expect(page.locator("#your-review")).toBeInViewport();
+    await expect(page.getByRole("heading", { name: "Rented from Sam Whitfield?" })).toBeInViewport();
+    expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
+  });
+
+  test("the button reads “Review this property” on a property and “Edit your review” once you've written one", async ({
+    page,
+  }) => {
+    await page.goto(await findPropertyPath(page, "97202", "3315 SE Division St"));
+    await expect(page.getByRole("link", { name: "Review this property" })).toBeVisible();
+
+    // Tom reviewed Sam Whitfield in the demo data.
+    const samPath = await findPersonPath(page, "landlord", "Sam Whitfield");
+    await logIn(page, DEMO.renters.tom.email, DEMO_PASSWORD);
+    await page.goto(samPath);
+    const edit = page.getByRole("link", { name: "Edit your review" });
+    await expect(edit).toBeVisible();
+    await edit.click();
+    await expect(page.getByRole("button", { name: "Update review" })).toBeInViewport();
+  });
+
+  test("no review button where you can't review", async ({ page }) => {
+    const mariaPath = await findPersonPath(page, "landlord", "Maria Gonzalez");
+    // Landlords can't review landlords.
+    await logIn(page, DEMO.landlords.sam.email, DEMO_PASSWORD);
+    await page.goto(mariaPath);
+    await expect(page.getByRole("heading", { level: 1, name: "Maria Gonzalez" })).toBeVisible();
+    await expect(page.getByRole("link", { name: /^Review Maria Gonzalez$|^Edit your review$/ })).toHaveCount(0);
+    // Nor on your own profile.
+    await page.goto(await myProfilePath(page));
+    await expect(page.getByRole("link", { name: /^Review |^Edit your review$/ })).toHaveCount(0);
+  });
+
+  test("the signed-in header's account link has an accessible name", async ({ page }) => {
+    await logIn(page, DEMO.renters.aisha.email, DEMO_PASSWORD);
+    // On a phone only the avatar shows, so the name comes from aria-label.
+    const account = page.getByRole("banner").getByRole("link", { name: "My account" });
+    await expect(account).toBeVisible();
+    await expect(account).toHaveAttribute("href", "/dashboard");
+  });
+
+  test("the home page, directories, and search don't scroll sideways", async ({ page }) => {
+    for (const path of ["/", "/landlords", "/renters", "/properties", "/search?q=Austin", "/login", "/signup"]) {
+      await page.goto(path);
+      expect(await horizontalOverflow(page), path).toBeLessThanOrEqual(0);
+    }
+  });
+
+  test("the mobile “Review” button moves keyboard focus into the review form", async ({ page }) => {
+    const path = await findPersonPath(page, "landlord", "Sam Whitfield");
+    await page.goto(path);
+    const cta = page.getByRole("link", { name: "Review Sam Whitfield", exact: true });
+    await cta.focus();
+    await page.keyboard.press("Enter");
+    await expect(page).toHaveURL(`${path}#your-review`);
+    // The next Tab lands inside the form, not back at the top of the page.
+    await page.keyboard.press("Tab");
+    const insideForm = await page.evaluate(() => Boolean(document.activeElement?.closest("#your-review")));
+    expect(insideForm).toBe(true);
   });
 });

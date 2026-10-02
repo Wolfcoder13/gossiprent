@@ -4,10 +4,10 @@ import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getDb } from "@/db";
-import { reviews, sessions, users } from "@/db/schema";
+import { properties, reviews, sessions, users } from "@/db/schema";
 import { getCurrentUser } from "@/lib/auth/current-user";
 import { hashPassword, verifyPassword } from "@/lib/auth/password";
-import { isRateLimited, RATE_LIMITS, recordAttempt } from "@/lib/auth/rate-limit";
+import { consumeAttempt, RATE_LIMITS } from "@/lib/auth/rate-limit";
 import { deleteOtherSessions, deleteSession } from "@/lib/auth/session";
 import { profilePath } from "@/lib/paths";
 import {
@@ -46,8 +46,10 @@ export async function changePassword(_prev: FormState, formData: FormData): Prom
   if (!parsed.success) return parsed.state;
   const { currentPassword, newPassword } = parsed.data;
 
-  const key = `password:user:${user.id}`;
-  if (await isRateLimited([{ key, ...RATE_LIMITS.passwordChangePerUser }])) {
+  const attempt = await consumeAttempt([
+    { key: `password:user:${user.id}`, ...RATE_LIMITS.passwordChangePerUser },
+  ]);
+  if (attempt.limited) {
     return { status: "error", message: "Too many attempts. Please wait a few minutes and try again." };
   }
 
@@ -58,7 +60,6 @@ export async function changePassword(_prev: FormState, formData: FormData): Prom
     .where(eq(users.id, user.id))
     .limit(1);
   if (!row || !(await verifyPassword(currentPassword, row.passwordHash))) {
-    await recordAttempt([key]);
     return {
       status: "error",
       message: "Please fix the highlighted fields.",
@@ -71,6 +72,7 @@ export async function changePassword(_prev: FormState, formData: FormData): Prom
     .set({ passwordHash: await hashPassword(newPassword) })
     .where(eq(users.id, user.id));
   await deleteOtherSessions(user.id);
+  await attempt.release();
   return {
     status: "success",
     message: "Password changed. You've been signed out on your other devices.",
@@ -78,11 +80,11 @@ export async function changePassword(_prev: FormState, formData: FormData): Prom
 }
 
 /** Sign out every other browser/device, keeping this one signed in. */
-export async function signOutOtherDevices(): Promise<void> {
+export async function signOutOtherDevices(): Promise<FormState> {
   const user = await getCurrentUser();
-  if (!user) redirect("/login");
+  if (!user) return { status: "error", message: "Please log in again." };
   await deleteOtherSessions(user.id);
-  redirect("/dashboard?signedOut=others");
+  return { status: "success", message: "You've been signed out on all your other devices." };
 }
 
 /**
@@ -113,6 +115,9 @@ export async function deleteAccount(formData: FormData): Promise<void> {
       return;
     }
     await tx.delete(sessions).where(eq(sessions.userId, user.id));
+    // Same as the hard delete's ON DELETE SET NULL: their listings become
+    // claimable by whoever manages them now.
+    await tx.update(properties).set({ landlordId: null }).where(eq(properties.landlordId, user.id));
     await tx
       .update(users)
       .set({
@@ -126,5 +131,6 @@ export async function deleteAccount(formData: FormData): Promise<void> {
   });
 
   revalidatePath("/", "layout");
+  revalidatePath("/properties");
   redirect("/?account=deleted");
 }

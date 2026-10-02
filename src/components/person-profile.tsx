@@ -14,7 +14,7 @@ import { Pagination, redirectIfPastLastPage } from "./pagination";
 import { RatingSummary } from "./rating-summary";
 import { ReviewList } from "./review-card";
 import { ReviewPanel, ReviewsHeading } from "./review-panel";
-import { Avatar, ButtonLink, Card, EmptyState, RoleBadge } from "./ui";
+import { Avatar, buttonStyles, Card, cx, EmptyState, RoleBadge } from "./ui";
 
 const PROPERTIES_SHOWN = 60;
 
@@ -62,7 +62,7 @@ export async function PersonProfile({
               <Avatar name={person.name} id={person.id} size="lg" />
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
-                  <h1 className="break-words text-2xl font-bold tracking-tight text-ink sm:text-3xl">
+                  <h1 className="min-w-0 text-2xl font-bold tracking-tight wrap-anywhere text-ink sm:text-3xl">
                     {person.name}
                   </h1>
                   <RoleBadge role={person.role} />
@@ -72,7 +72,7 @@ export async function PersonProfile({
                     </span>
                   )}
                 </div>
-                <p className="mt-1 text-sm text-muted">
+                <p className="mt-1 text-sm wrap-anywhere text-muted">
                   {person.city ? `${person.city} · ` : ""}Member since {formatMonthYear(person.createdAt)}
                 </p>
                 {person.bio && (
@@ -80,7 +80,8 @@ export async function PersonProfile({
                 )}
                 {person.deletedAt && (
                   <p className="mt-3 text-sm text-muted">
-                    {person.name} closed their account. Reviews written about them are still shown.
+                    {person.name} closed their account
+                    {summary.count > 0 ? ". Reviews written about them are still shown." : "."}
                   </p>
                 )}
               </div>
@@ -89,9 +90,13 @@ export async function PersonProfile({
               <RatingSummary summary={summary} />
             </div>
             {mayReview && (
-              <ButtonLink href="#your-review" className="mt-6 w-full lg:hidden">
+              // A plain anchor (not next/link) so keyboard focus moves to the form too.
+              <a
+                href="#your-review"
+                className={cx(buttonStyles.base, buttonStyles.primary, "mt-6 w-full wrap-anywhere lg:hidden")}
+              >
                 {myReview ? "Edit your review" : `Review ${person.name}`}
-              </ButtonLink>
+              </a>
             )}
           </Card>
 
@@ -121,7 +126,7 @@ export async function PersonProfile({
             </section>
           )}
 
-          <section aria-labelledby="reviews-heading" id="reviews" className="scroll-mt-24">
+          <section aria-labelledby="reviews-heading" id="reviews" className="scroll-mt-36 sm:scroll-mt-24">
             <div className="mb-4">
               <ReviewsHeading id="reviews-heading" count={reviewPage.total} />
               <p className="text-sm text-muted">What {reviewerNoun} say about {person.name}.</p>

@@ -84,6 +84,9 @@ html {
 body {
   background: var(--canvas);
   color: var(--ink);
+  /* Long unbroken words (names, towns, URLs in reviews) wrap instead of
+     pushing the page sideways on phones. */
+  overflow-wrap: break-word;
 }
 
 :focus-visible {

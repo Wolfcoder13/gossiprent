@@ -5,12 +5,14 @@ import {
   idleFormState,
   loginSchema,
   parseForm,
+  passwordChangeSchema,
   profileSchema,
   propertySchema,
   reviewSchema,
   roleSchema,
   safeRedirectPath,
   signupSchema,
+  stripNul,
 } from "@/lib/validation";
 
 const UUID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
@@ -472,3 +474,212 @@ describe("safeRedirectPath", () => {
     }
   });
 });
+
+describe("safeRedirectPath normalization", () => {
+  it.each([
+    ["dot segment before a double slash", "/.//evil.example"],
+    ["dot segment, path after the host", "/.//evil.example/landlords"],
+    ["parent segment before a double slash", "/a/..//evil.example"],
+    ["several parent segments", "/a/b/../..//evil.example"],
+    ["percent-encoded dot segment", "/%2e//evil.example"],
+    ["percent-encoded parent segment", "/x/%2E%2E//evil.example"],
+    ["dot segment before a triple slash", "/.///evil.example"],
+  ])("rejects a %s (%j) that a browser would resolve to another host", (_label, input) => {
+    expect(safeRedirectPath(input)).toBe("/");
+    expect(safeRedirectPath(input, "/dashboard")).toBe("/dashboard");
+  });
+
+  it.each([
+    ["/./dashboard", "/dashboard"],
+    ["/a/../dashboard", "/dashboard"],
+    ["/../../dashboard", "/dashboard"],
+    ["/landlords/./x/../", "/landlords/"],
+    ["/%2e%2e/renters", "/renters"],
+    ["/.", "/"],
+    ["/..", "/"],
+  ])("resolves dot segments in %j to %j", (input, expected) => {
+    expect(safeRedirectPath(input)).toBe(expected);
+  });
+
+  it.each([
+    ["/landlords/café", "/landlords/caf%C3%A9"],
+    ["/søk?q=æble", "/s%C3%B8k?q=%C3%A6ble"],
+    ["/renters#über", "/renters#%C3%BCber"],
+    ["/😀", "/%F0%9F%98%80"],
+    ["/東京", "/%E6%9D%B1%E4%BA%AC"],
+    ["/a b", "/a%20b"],
+  ])("percent-encodes non-ASCII and spaces: %j becomes %j", (input, expected) => {
+    expect(safeRedirectPath(input)).toBe(expected);
+  });
+
+  it("keeps already-encoded characters as they are (no double encoding or decoding)", () => {
+    expect(safeRedirectPath("/landlords/caf%C3%A9")).toBe("/landlords/caf%C3%A9");
+    expect(safeRedirectPath("/%5Cevil.com")).toBe("/%5Cevil.com");
+    expect(safeRedirectPath("/search?q=a%2Fb%2F%2Fc")).toBe("/search?q=a%2Fb%2F%2Fc");
+  });
+
+  it("keeps a double slash inside the query or hash (it can't change the host)", () => {
+    expect(safeRedirectPath("/login?next=//evil.example")).toBe("/login?next=//evil.example");
+    expect(safeRedirectPath("/renters#//evil.example")).toBe("/renters#//evil.example");
+  });
+
+  it("encodes look-alike slashes instead of treating them as separators", () => {
+    // Fullwidth solidus and division slash are just characters in a path.
+    expect(safeRedirectPath("/\uFF0Fevil.example")).toBe("/%EF%BC%8Fevil.example");
+    expect(safeRedirectPath("/\u2215evil.example")).toBe("/%E2%88%95evil.example");
+  });
+
+  it("always returns a same-origin, ASCII-only value that can go in a Location header", () => {
+    const inputs = [
+      "/.//evil.example",
+      "/a/..//evil.example",
+      "/%2e//evil.example",
+      "/landlords/café",
+      "/😀?q=☃#ü",
+      "/\u2028/evil.example",
+      "/\u00a0//evil.example",
+      "/./\uFF0F/evil.example",
+      "/ok",
+    ];
+    for (const input of inputs) {
+      const result = safeRedirectPath(input);
+      expect(result, input).toMatch(/^\/(?!\/)[\x21-\x7e]*$/);
+      expect(new URL(result, "https://gossiprent.example").origin, input).toBe("https://gossiprent.example");
+      // Resolving the result again doesn't change it (it's already normalized).
+      expect(safeRedirectPath(result), input).toBe(result);
+    }
+  });
+});
+
+describe("stripNul", () => {
+  it("removes every NUL character", () => {
+    expect(stripNul("a\u0000b")).toBe("ab");
+    expect(stripNul("\u0000a\u0000\u0000b\u0000")).toBe("ab");
+    expect(stripNul("\u0000")).toBe("");
+  });
+
+  it("returns other strings unchanged, including other control characters", () => {
+    const text = "Line one\nLine two\tTabbed \u0001 Ünïcødé";
+    expect(stripNul(text)).toBe(text);
+    expect(stripNul("")).toBe("");
+  });
+
+  it("is applied to parsed form input, so NULs can't reach the database", () => {
+    const form = new FormData();
+    form.set("kind", "landlord");
+    form.set("subjectId", UUID);
+    form.set("rating", "4");
+    form.set("title", "Great\u0000 place");
+    form.set("body", "Pasted from a PDF:\u0000 the heating was broken all winter.");
+    const result = parseForm(reviewSchema, form);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.title).toBe("Great place");
+    expect(result.data.body).toBe("Pasted from a PDF: the heating was broken all winter.");
+  });
+
+  it("strips NULs before length checks (a NUL-padded title is still too short)", () => {
+    const form = new FormData();
+    form.set("kind", "landlord");
+    form.set("subjectId", UUID);
+    form.set("rating", "4");
+    form.set("title", "a\u0000\u0000\u0000\u0000b");
+    form.set("body", "x".repeat(25));
+    const result = parseForm(reviewSchema, form);
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.state.fieldErrors?.title).toEqual(["Title must be at least 3 characters."]);
+    expect(result.state.values?.title).toBe("ab");
+  });
+});
+
+describe("passwordChangeSchema", () => {
+  /** A valid change, with the new password confirmed. */
+  const change = (currentPassword: string, newPassword: string, confirmPassword = newPassword) => ({
+    currentPassword,
+    newPassword,
+    confirmPassword,
+  });
+
+  it("accepts a current password and a confirmed new one of 8+ characters, untouched", () => {
+    expect(passwordChangeSchema.parse(change(" old pw ", "  new password  "))).toEqual({
+      currentPassword: " old pw ",
+      newPassword: "  new password  ",
+      confirmPassword: "  new password  ",
+    });
+  });
+
+  it("requires the current password but not any particular length for it", () => {
+    expect(fieldErrors(passwordChangeSchema, change("", "long-enough")).currentPassword).toEqual([
+      "Enter your current password.",
+    ]);
+    expect(passwordChangeSchema.safeParse(change("x", "long-enough")).success).toBe(true);
+    expect(
+      fieldErrors(passwordChangeSchema, { newPassword: "long-enough", confirmPassword: "long-enough" }).currentPassword,
+    ).toBeDefined();
+  });
+
+  it("applies the sign-up password rules to the new password", () => {
+    expect(fieldErrors(passwordChangeSchema, change("old", "short")).newPassword).toEqual([
+      "Password must be at least 8 characters.",
+    ]);
+    expect(fieldErrors(passwordChangeSchema, change("old", "x".repeat(129))).newPassword).toEqual([
+      "Password must be 128 characters or fewer.",
+    ]);
+    expect(passwordChangeSchema.safeParse(change("old", "x".repeat(128))).success).toBe(true);
+    expect(passwordChangeSchema.safeParse(change("old", "x".repeat(8))).success).toBe(true);
+  });
+
+  it("caps the current password at 128 characters (no huge inputs to the hasher)", () => {
+    expect(fieldErrors(passwordChangeSchema, change("x".repeat(129), "long-enough")).currentPassword).toHaveLength(1);
+  });
+
+  it("requires the confirmation to match the new password exactly", () => {
+    expect(fieldErrors(passwordChangeSchema, change("old", "long-enough", "long-enougH"))).toEqual({
+      confirmPassword: ["The new passwords don't match."],
+    });
+    // No trimming: a stray space is a different password.
+    expect(fieldErrors(passwordChangeSchema, change("old", "long-enough", "long-enough ")).confirmPassword).toEqual([
+      "The new passwords don't match.",
+    ]);
+    expect(fieldErrors(passwordChangeSchema, change("old", "long-enough", "")).confirmPassword).toEqual([
+      "The new passwords don't match.",
+    ]);
+  });
+
+  it("a too-long new password typed twice only gets friendly messages", () => {
+    const errors = fieldErrors(passwordChangeSchema, change("old", "x".repeat(129)));
+    expect(errors.newPassword).toEqual(["Password must be 128 characters or fewer."]);
+    for (const message of errors.confirmPassword ?? []) expect(message).not.toMatch(/Too big|expected string/);
+  });
+
+  it("requires the confirmation field", () => {
+    expect(
+      fieldErrors(passwordChangeSchema, { currentPassword: "old", newPassword: "long-enough" }).confirmPassword,
+    ).toBeDefined();
+  });
+
+  it("reports every field at once", () => {
+    const errors = fieldErrors(passwordChangeSchema, change("", "", "different"));
+    expect(Object.keys(errors).sort()).toEqual(["confirmPassword", "currentPassword", "newPassword"]);
+    // An empty confirmation of an empty new password only needs the one message.
+    expect(Object.keys(fieldErrors(passwordChangeSchema, change("", ""))).sort()).toEqual([
+      "currentPassword",
+      "newPassword",
+    ]);
+  });
+
+  it("never echoes any password back to the form", () => {
+    const form = new FormData();
+    form.set("currentPassword", "my-old-secret");
+    form.set("newPassword", "my-new-secret");
+    form.set("confirmPassword", "my-new-secreT");
+    const result = parseForm(passwordChangeSchema, form);
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.state.fieldErrors).toEqual({ confirmPassword: ["The new passwords don't match."] });
+    expect(result.state.values).toEqual({});
+    expect(JSON.stringify(result.state)).not.toMatch(/my-(old|new)-secre/);
+  });
+});
+

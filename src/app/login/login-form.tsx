@@ -1,15 +1,17 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useRef } from "react";
 import { login } from "@/app/actions/auth";
-import { FormMessage, SubmitButton, TextInput } from "@/components/form";
+import { FormMessage, SubmitButton, TextInput, useFocusAfterSubmit } from "@/components/form";
 import { idleFormState } from "@/lib/validation";
 
 export function LoginForm({ next }: { next: string }) {
   const [state, formAction] = useActionState(login, idleFormState);
+  const formRef = useRef<HTMLFormElement>(null);
+  useFocusAfterSubmit(formRef, state);
   const errors = state.fieldErrors ?? {};
   return (
-    <form action={formAction} className="space-y-5" noValidate>
+    <form ref={formRef} action={formAction} className="space-y-5" noValidate>
       <input type="hidden" name="next" value={next} />
       <FormMessage state={state} />
       <TextInput

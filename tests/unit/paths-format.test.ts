@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { formatDate, formatMonthYear, plural } from "@/lib/format";
-import { profilePath, subjectPath } from "@/lib/paths";
+import { pageHref, profilePath, subjectPath } from "@/lib/paths";
 
 const ID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
 
@@ -34,5 +34,44 @@ describe("format helpers", () => {
     expect(plural(1, "property", "properties")).toBe("1 property");
     expect(plural(3, "property", "properties")).toBe("3 properties");
     expect(plural(12345, "match", "matches")).toBe("12,345 matches");
+  });
+});
+
+describe("pageHref", () => {
+  it("leaves out page 1 and empty params", () => {
+    expect(pageHref("/landlords", 1)).toBe("/landlords");
+    expect(pageHref("/landlords", 1, { q: undefined, sort: "" })).toBe("/landlords");
+  });
+
+  it("adds the page number after the other params", () => {
+    expect(pageHref("/landlords", 2)).toBe("/landlords?page=2");
+    expect(pageHref("/landlords", 3, { q: "austin", sort: "name" })).toBe("/landlords?q=austin&sort=name&page=3");
+    expect(pageHref("/renters", 1, { q: "chicago", sort: undefined })).toBe("/renters?q=chicago");
+  });
+
+  it("encodes the query", () => {
+    expect(pageHref("/properties", 2, { q: "Austin, TX" })).toBe("/properties?q=Austin%2C+TX&page=2");
+    expect(pageHref("/properties", 1, { q: "a&b=c#d" })).toBe("/properties?q=a%26b%3Dc%23d");
+    expect(pageHref("/properties", 1, { q: "café" })).toBe("/properties?q=caf%C3%A9");
+  });
+
+  it("appends the hash last", () => {
+    expect(pageHref(`/landlords/${ID}`, 2, {}, "reviews")).toBe(`/landlords/${ID}?page=2#reviews`);
+    expect(pageHref(`/landlords/${ID}`, 1, {}, "reviews")).toBe(`/landlords/${ID}#reviews`);
+    expect(pageHref("/properties", 4, { sort: "most" }, "reviews")).toBe("/properties?sort=most&page=4#reviews");
+  });
+
+  it("ignores page numbers below 2", () => {
+    expect(pageHref("/landlords", 0)).toBe("/landlords");
+    expect(pageHref("/landlords", -5)).toBe("/landlords");
+  });
+
+  it("round-trips through URLSearchParams", () => {
+    const href = pageHref("/renters", 7, { q: "  spaced  out ", sort: "newest" });
+    const url = new URL(href, "https://gossiprent.example");
+    expect(url.pathname).toBe("/renters");
+    expect(url.searchParams.get("q")).toBe("  spaced  out ");
+    expect(url.searchParams.get("sort")).toBe("newest");
+    expect(url.searchParams.get("page")).toBe("7");
   });
 });

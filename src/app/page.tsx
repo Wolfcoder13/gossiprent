@@ -41,7 +41,7 @@ export default async function HomePage({ searchParams }: PageProps<"/">) {
 
   return (
     <div className="mx-auto max-w-6xl px-4 sm:px-6">
-      {account === "deleted" && (
+      {account === "deleted" && !user && (
         <div className="pt-6">
           <Notice tone="success">Your account is closed and the reviews you wrote have been deleted.</Notice>
         </div>
@@ -69,7 +69,7 @@ export default async function HomePage({ searchParams }: PageProps<"/">) {
             name="q"
             type="search"
             placeholder="Search a name, city, or address"
-            className="flex-1 rounded-full border border-line-input bg-surface px-5 py-3 text-ink shadow-sm placeholder:text-muted/70 focus:border-brand focus:outline-none focus:ring-2 focus:ring-focus/40"
+            className="flex-1 rounded-full border border-line-input bg-surface px-5 py-3 text-ink shadow-sm placeholder:text-muted focus:border-brand focus:outline-none focus:ring-2 focus:ring-focus/40"
           />
           <button
             type="submit"

@@ -9,13 +9,7 @@ import {
   simulatePasswordCheck,
   verifyPassword,
 } from "@/lib/auth/password";
-import {
-  clearAttempts,
-  clientIp,
-  isRateLimited,
-  RATE_LIMITS,
-  recordAttempt,
-} from "@/lib/auth/rate-limit";
+import { clearAttempts, clientIp, consumeAttempt, RATE_LIMITS } from "@/lib/auth/rate-limit";
 import { createSession, deleteSession } from "@/lib/auth/session";
 import {
   formValues,
@@ -37,11 +31,11 @@ export async function signup(_prev: FormState, formData: FormData): Promise<Form
   if (!parsed.success) return parsed.state;
   const { name, email, password, role, city } = parsed.data;
 
-  const ipKey = `signup:ip:${await clientIp()}`;
-  if (await isRateLimited([{ key: ipKey, ...RATE_LIMITS.signupPerIp }])) {
-    return tooManyAttempts(formData);
-  }
-  await recordAttempt([ipKey]);
+  const ip = await clientIp();
+  const attempt = await consumeAttempt(
+    ip ? [{ key: `signup:ip:${ip}`, ...RATE_LIMITS.signupPerIp }] : [],
+  );
+  if (attempt.limited) return tooManyAttempts(formData);
 
   const db = await getDb();
   let userId: string;
@@ -74,15 +68,18 @@ export async function login(_prev: FormState, formData: FormData): Promise<FormS
   if (!parsed.success) return parsed.state;
   const { email, password } = parsed.data;
 
-  // Throttle guessing per account and per network, before doing any expensive
-  // password hashing.
-  const emailKey = `login:email:${email}`;
-  const ipKey = `login:ip:${await clientIp()}`;
-  const limited = await isRateLimited([
-    { key: emailKey, ...RATE_LIMITS.loginPerEmail },
-    { key: ipKey, ...RATE_LIMITS.loginPerIp },
+  // Throttle password guessing before doing any expensive hashing. The strict
+  // limit is per account *and* network, so a stranger's failed guesses don't
+  // lock the real owner out; a much higher per-account limit and a per-network
+  // limit catch guessing spread across many networks or many accounts.
+  const ip = await clientIp();
+  const accountAndIpKey = `login:account-ip:${email}|${ip ?? "unknown"}`;
+  const attempt = await consumeAttempt([
+    { key: accountAndIpKey, ...RATE_LIMITS.loginPerAccountAndIp },
+    { key: `login:account:${email}`, ...RATE_LIMITS.loginPerAccount },
+    ...(ip ? [{ key: `login:ip:${ip}`, ...RATE_LIMITS.loginPerIp }] : []),
   ]);
-  if (limited) return tooManyAttempts(formData);
+  if (attempt.limited) return tooManyAttempts(formData);
 
   const db = await getDb();
   const [user] = await db
@@ -95,7 +92,6 @@ export async function login(_prev: FormState, formData: FormData): Promise<FormS
     ? await verifyPassword(password, user.passwordHash)
     : (await simulatePasswordCheck(password), false);
   if (!user || !valid) {
-    await recordAttempt([emailKey, ipKey]);
     return {
       status: "error",
       message: "That email and password don't match an account.",
@@ -103,7 +99,9 @@ export async function login(_prev: FormState, formData: FormData): Promise<FormS
     };
   }
 
-  await clearAttempts([emailKey]);
+  // A successful login doesn't count, and forgets this network's earlier misses.
+  await attempt.release();
+  await clearAttempts([accountAndIpKey]);
   await createSession(user.id);
   redirect(safeRedirectPath(formData.get("next"), "/dashboard"));
 }

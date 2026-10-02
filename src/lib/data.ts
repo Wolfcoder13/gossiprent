@@ -132,7 +132,10 @@ export function parseSort(value: string | string[] | undefined): PersonSort {
 export function parseQuery(value: string | string[] | undefined): string {
   const raw = Array.isArray(value) ? value[0] : value;
   // Postgres rejects NUL characters in text, so drop them rather than erroring.
-  return raw?.replaceAll("\u0000", "").trim().slice(0, 100).trim() ?? "";
+  // toWellFormed() repairs an emoji cut in half by the length limit.
+  const query = raw?.replaceAll("\u0000", "").trim().slice(0, 100).toWellFormed().trim() ?? "";
+  // A query with no words (e.g. just ",") would otherwise match everything.
+  return searchPatterns(query).length > 0 ? query : "";
 }
 
 /**
@@ -140,11 +143,14 @@ export function parseQuery(value: string | string[] | undefined): string {
  * Chicago" match even though the words live in different columns.
  */
 export function searchPatterns(query: string | undefined): string[] {
-  return (query ?? "")
-    .split(/[\s,]+/)
-    .filter(Boolean)
-    .slice(0, 8)
-    .map(likePattern);
+  // De-duplicate ignoring case, but search with the words as typed: JavaScript
+  // and Postgres lower-case some letters differently (Greek final sigma,
+  // Turkish dotted İ), and ILIKE is already case-insensitive.
+  const words = new Map<string, string>();
+  for (const word of (query ?? "").split(/[\s,]+/)) {
+    if (word && !words.has(word.toLowerCase())) words.set(word.toLowerCase(), word);
+  }
+  return [...words.values()].slice(0, 8).map(likePattern);
 }
 
 function paginate<T>(items: T[], total: number, page: number, pageSize: number): Paginated<T> {

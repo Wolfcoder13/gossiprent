@@ -1,13 +1,11 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { unlinkProperty, claimProperty } from "@/app/actions/properties";
-import { ConfirmForm } from "@/components/confirm-form";
 import { Pagination, redirectIfPastLastPage } from "@/components/pagination";
 import { RatingSummary } from "@/components/rating-summary";
 import { ReviewList } from "@/components/review-card";
 import { ReviewPanel, ReviewsHeading } from "@/components/review-panel";
-import { Avatar, ButtonLink, buttonStyles, Card, cx, EmptyState, RoleBadge } from "@/components/ui";
+import { Avatar, buttonStyles, Card, cx, EmptyState, RoleBadge } from "@/components/ui";
 import { getCurrentUser } from "@/lib/auth/current-user";
 import {
   getProperty,
@@ -18,6 +16,7 @@ import {
   propertyLabel,
 } from "@/lib/data";
 import { formatMonthYear } from "@/lib/format";
+import { LandlordActions } from "./landlord-actions";
 
 export async function generateMetadata({ params }: PageProps<"/properties/[id]">): Promise<Metadata> {
   const property = await getProperty((await params).id);
@@ -50,7 +49,6 @@ export default async function PropertyPage({ params, searchParams }: PageProps<"
   const isOwner = Boolean(viewer && property.landlord?.id === viewer.id);
   const canClaim = viewer?.role === "landlord" && !property.landlord;
   const mayReview = !isOwner && (!viewer || viewer.role === "renter");
-  const smallButton = cx(buttonStyles.base, buttonStyles.secondary, "px-3 py-1.5 text-xs");
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-10 sm:px-6">
@@ -61,10 +59,10 @@ export default async function PropertyPage({ params, searchParams }: PageProps<"
               <RoleBadge role="property" />
               <span className="text-xs text-muted">Listed {formatMonthYear(property.createdAt)}</span>
             </div>
-            <h1 className="mt-2 break-words text-2xl font-bold tracking-tight text-ink sm:text-3xl">
+            <h1 className="mt-2 wrap-anywhere text-2xl font-bold tracking-tight text-ink sm:text-3xl">
               {label}
             </h1>
-            <p className="mt-1 text-muted">
+            <p className="mt-1 wrap-anywhere text-muted">
               {property.city}, {property.region}
               {property.postalCode ? ` ${property.postalCode}` : ""}
             </p>
@@ -76,41 +74,26 @@ export default async function PropertyPage({ params, searchParams }: PageProps<"
               {property.landlord ? (
                 <>
                   <Avatar name={property.landlord.name} id={property.landlord.id} size="sm" />
-                  <p className="min-w-0 flex-1 text-sm text-muted">
+                  <p className="min-w-0 grow basis-40 text-sm text-muted">
                     Landlord:{" "}
                     <Link
                       href={`/landlords/${property.landlord.id}`}
-                      className="break-words font-semibold text-ink hover:underline"
+                      className="font-semibold wrap-anywhere text-ink hover:underline"
                     >
                       {property.landlord.name}
                     </Link>
                   </p>
-                  {isOwner && (
-                    <ConfirmForm
-                      action={unlinkProperty}
-                      fields={{ propertyId: property.id }}
-                      confirmMessage="Remove yourself as the landlord of this property? The listing and its reviews stay on GossipRent."
-                    >
-                      <button type="submit" className={smallButton}>
-                        Not my property
-                      </button>
-                    </ConfirmForm>
-                  )}
                 </>
               ) : (
-                <>
-                  <p className="min-w-0 flex-1 text-sm text-muted">
-                    The landlord for this property isn&apos;t on GossipRent yet.
-                  </p>
-                  {canClaim && (
-                    <form action={claimProperty}>
-                      <input type="hidden" name="propertyId" value={property.id} />
-                      <button type="submit" className={smallButton}>
-                        I manage this property
-                      </button>
-                    </form>
-                  )}
-                </>
+                <p className="min-w-0 grow basis-40 text-sm text-muted">
+                  The landlord for this property isn&apos;t on GossipRent yet.
+                </p>
+              )}
+              {viewer?.role === "landlord" && (
+                <LandlordActions
+                  propertyId={property.id}
+                  mode={isOwner ? "unlink" : canClaim ? "claim" : null}
+                />
               )}
             </div>
 
@@ -118,13 +101,17 @@ export default async function PropertyPage({ params, searchParams }: PageProps<"
               <RatingSummary summary={summary} />
             </div>
             {mayReview && (
-              <ButtonLink href="#your-review" className="mt-6 w-full lg:hidden">
+              // A plain anchor (not next/link) so keyboard focus moves to the form too.
+              <a
+                href="#your-review"
+                className={cx(buttonStyles.base, buttonStyles.primary, "mt-6 w-full lg:hidden")}
+              >
                 {myReview ? "Edit your review" : "Review this property"}
-              </ButtonLink>
+              </a>
             )}
           </Card>
 
-          <section aria-labelledby="reviews-heading" id="reviews" className="scroll-mt-24">
+          <section aria-labelledby="reviews-heading" id="reviews" className="scroll-mt-36 sm:scroll-mt-24">
             <div className="mb-4">
               <ReviewsHeading id="reviews-heading" count={reviewPage.total} />
               <p className="text-sm text-muted">What renters say about living here.</p>

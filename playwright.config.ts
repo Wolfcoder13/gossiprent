@@ -62,7 +62,9 @@ export default defineConfig({
     env: {
       PGLITE_DATA_DIR: process.env.E2E_PGLITE_DATA_DIR,
       SEED_DEMO_DATA: "true",
-      // The suite signs up dozens of accounts from one IP address.
+      // The suite signs up dozens of accounts from one IP address. Rate limiting
+      // itself is covered by tests/unit/rate-limit.test.ts and
+      // tests/unit/server-actions.test.ts.
       AUTH_RATE_LIMIT: "off",
       // Never point the tests at the shell's DATABASE_URL; only an explicit
       // E2E_DATABASE_URL switches from the embedded database to Postgres.

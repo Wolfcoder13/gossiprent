@@ -8,7 +8,7 @@ export function cx(...classes: (string | false | null | undefined)[]): string {
 }
 
 export const buttonStyles = {
-  base: "inline-flex items-center justify-center gap-2 rounded-full px-4 py-2 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60",
+  base: "inline-flex items-center justify-center gap-2 rounded-full px-4 py-2 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60 aria-disabled:cursor-wait aria-disabled:opacity-60",
   primary: "bg-brand text-brand-ink hover:bg-brand-hover",
   secondary: "border border-line-strong bg-surface text-ink hover:bg-surface-muted",
   ghost: "text-ink hover:bg-surface-muted",
@@ -124,8 +124,10 @@ export function EmptyState({
 }) {
   return (
     <div className="rounded-2xl border border-dashed border-line-strong bg-surface/60 px-6 py-10 text-center">
-      <p className="font-semibold text-ink">{title}</p>
-      {children && <div className="mx-auto mt-1 max-w-md text-sm text-muted">{children}</div>}
+      <p className="font-semibold wrap-anywhere text-ink">{title}</p>
+      {children && (
+        <div className="mx-auto mt-1 max-w-md text-sm wrap-anywhere text-muted">{children}</div>
+      )}
       {action && <div className="mt-4">{action}</div>}
     </div>
   );
@@ -142,8 +144,8 @@ export function PageHeader({
 }) {
   return (
     <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight text-ink sm:text-4xl">{title}</h1>
+      <div className="min-w-0">
+        <h1 className="text-3xl font-bold tracking-tight wrap-anywhere text-ink sm:text-4xl">{title}</h1>
         {description && <p className="mt-2 max-w-2xl text-muted">{description}</p>}
       </div>
       {actions && <div className="flex shrink-0 gap-2">{actions}</div>}

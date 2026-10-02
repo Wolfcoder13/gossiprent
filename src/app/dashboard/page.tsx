@@ -1,19 +1,9 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { signOutOtherDevices } from "@/app/actions/account";
 import { CardGrid, PropertyCard } from "@/components/cards";
 import { RatingSummary } from "@/components/rating-summary";
 import { ReviewList } from "@/components/review-card";
-import {
-  ButtonLink,
-  buttonStyles,
-  Card,
-  cx,
-  EmptyState,
-  Notice,
-  PageHeader,
-  RoleBadge,
-} from "@/components/ui";
+import { ButtonLink, Card, EmptyState, PageHeader, RoleBadge } from "@/components/ui";
 import { requireUser } from "@/lib/auth/current-user";
 import {
   getRatingSummary,
@@ -24,7 +14,7 @@ import {
 } from "@/lib/data";
 import { profilePath } from "@/lib/paths";
 import { DeleteAccount } from "./delete-account";
-import { PasswordForm } from "./password-form";
+import { PasswordForm, SignOutOthersForm } from "./password-form";
 import { ProfileForm } from "./profile-form";
 
 export const metadata: Metadata = { title: "My account" };
@@ -48,9 +38,8 @@ function ShowingNote({ shown, total, href, label }: { shown: number; total: numb
   );
 }
 
-export default async function DashboardPage({ searchParams }: PageProps<"/dashboard">) {
+export default async function DashboardPage() {
   const user = await requireUser("/dashboard");
-  const { signedOut } = await searchParams;
   const isLandlord = user.role === "landlord";
 
   const [summary, aboutMe, propertyReviews, written, myProperties] = await Promise.all([
@@ -67,9 +56,6 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
 
   return (
     <div className="mx-auto max-w-6xl space-y-10 px-4 py-10 sm:px-6">
-      {signedOut === "others" && (
-        <Notice tone="success">You&apos;ve been signed out on all your other devices.</Notice>
-      )}
       <PageHeader
         title={<>Hi, {user.name.split(" ")[0]}</>}
         description={
@@ -220,11 +206,9 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
             <div className="mt-5">
               <PasswordForm />
             </div>
-            <form action={signOutOtherDevices} className="mt-5 border-t border-line pt-5">
-              <button type="submit" className={cx(buttonStyles.base, buttonStyles.secondary)}>
-                Sign out other devices
-              </button>
-            </form>
+            <div className="mt-5 border-t border-line pt-5">
+              <SignOutOthersForm />
+            </div>
           </Card>
           <Card as="section">
             <h2 className="text-lg font-semibold text-ink">Close account</h2>
