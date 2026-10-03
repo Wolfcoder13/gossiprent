@@ -8,6 +8,7 @@ import {
   parsePage,
   parseQuery,
   parseSort,
+  propertySearchTerms,
   REVIEWS_PAGE_SIZE,
   searchTerms,
 } from "@/lib/data";
@@ -162,6 +163,26 @@ describe("parseQuery", () => {
     // Other numbers are searched as usual.
     expect(parseQuery("Njálsgata 23")).toBe("Njálsgata 23");
     expect(parseQuery("101")).toBe("101");
+    expect(parseQuery("Hamraborg 14 0503")).toBe("Hamraborg 14 0503");
+  });
+
+  it("is empty when any part of it is shaped like a kennitala, however it's spaced or dashed", () => {
+    for (const value of [
+      "Jón 150385-3579",
+      "leigusali 1503853579 Akureyri",
+      "150385 - 3579",
+      "150385 -3579",
+      "150385  3579",
+      "150385–3579",
+      "150385 – 3579",
+      "Jón, 150385 – 3579",
+    ]) {
+      expect(parseQuery(value), JSON.stringify(value)).toBe("");
+    }
+  });
+
+  it("checks for a kennitala before cutting the query to 100 characters", () => {
+    expect(parseQuery(`${"x".repeat(95)} 150385-3579`)).toBe("");
   });
 });
 
@@ -230,6 +251,42 @@ describe("searchTerms", () => {
   it("drops repeats before applying the 8-word cap, so they can't push real words out", () => {
     const query = `${"a ".repeat(20)}b c d e f g h i j`;
     expect(searchTerms(query)).toEqual(["a", "b", "c", "d", "e", "f", "g", "h"]);
+  });
+});
+
+describe("propertySearchTerms", () => {
+  it("matches an address copied from the site, with its apartment word", () => {
+    for (const query of [
+      "Njálsgata 23, íbúð 0201",
+      "Njálsgata 23 apt. 0201",
+      "njalsgata 23 ibud 0201",
+      "Njálsgata 23 íb. 0201",
+      "Njálsgata 23 #0201",
+      "Njálsgata 23 # 0201",
+      "NJÁLSGATA 23 ÍBÚÐ 0201",
+    ]) {
+      expect(propertySearchTerms(query), query).toEqual(["njalsgata", "23", "0201"]);
+    }
+  });
+
+  it("strips the apartment word the way the property form stores the apartment", () => {
+    expect(propertySearchTerms("Njálsgata 23 íbúð-0201")).toEqual(["njalsgata", "23", "0201"]);
+    expect(propertySearchTerms("Njálsgata 23 íbúð:0201")).toEqual(["njalsgata", "23", "0201"]);
+    expect(propertySearchTerms("Hringbraut 79 apt.B")).toEqual(["hringbraut", "79", "b"]);
+    expect(propertySearchTerms("Hringbraut 79 unit: 5")).toEqual(["hringbraut", "79", "5"]);
+    expect(propertySearchTerms("#B")).toEqual(["b"]);
+  });
+
+  it("keeps words that only start like an apartment word", () => {
+    expect(propertySearchTerms("Unitas 3")).toEqual(["unitas", "3"]);
+    expect(propertySearchTerms("Íbúðargata 4")).toEqual(["ibudargata", "4"]);
+    expect(propertySearchTerms("Aptos 3")).toEqual(["aptos", "3"]);
+  });
+
+  it("is empty for a query that is only apartment words", () => {
+    expect(propertySearchTerms("íbúð")).toEqual([]);
+    expect(propertySearchTerms("apt. #")).toEqual([]);
+    expect(propertySearchTerms(undefined)).toEqual([]);
   });
 });
 

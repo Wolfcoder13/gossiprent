@@ -18,7 +18,7 @@ Built with Next.js 16 (App Router), React 19, Tailwind CSS 4, Drizzle ORM, and P
 - **Nobody can remove reviews written about them**: not by closing their account, removing a role, or signing up again. Only a review's author (or the site operator) can delete it.
 - Directories of landlords, renters, and properties, with accent-insensitive search ("Kopavogur" finds Kópavogur) and Icelandic A–Ö sorting.
 - Icelandic addresses: street and house number, apartment, and a postcode from the official list (e.g. "101 Reykjavík").
-- Renters can add the place they rent and link its landlord by kennitala. Landlords can list their properties, claim a listing, or say "Not my property"; the listing and its reviews always stay on the site.
+- Renters can add the place they rent and link its landlord by kennitala. Landlords can list their properties, claim a listing, or say "Not my property" (after which nobody else can link them to it again); the listing and its reviews always stay on the site.
 - A report form for reviews, profiles, properties and taken-over accounts, plus command-line tools for the operator (`npm run admin`).
 - A dashboard with reviews about you, reviews you've written, your properties, profile editing, password change, "sign out other devices", and closing your account.
 - Works without JavaScript. Supports dark mode and screen readers.
@@ -104,7 +104,7 @@ tests/                 Unit (Vitest) and end-to-end (Playwright) tests
 - **Language**: Icelandic by default; the language switch sets a `lang` cookie (URLs don't change). All text is in `src/i18n/messages/{is,en}`, and a unit test checks both languages have the same keys and placeholders.
 - **Who can review whom** is enforced on the server in `src/app/actions/reviews.ts`. If you rent, you can review landlords and properties; if you're a landlord, you can review renters; if you're both, you can do all three. Nobody reviews themselves or a property they manage, and the database allows one review per author per subject and role.
 - **Roles**: each person has `is_landlord` and `is_renter` flags, and each review records which role it's about, so ratings never mix. Being reviewed in a role gives you that role, and it can only be removed while nobody has reviewed you in it.
-- **Rate limits**: besides login and sign-up, kennitala lookups and checks, new reviews, new profiles and reports are rate limited per account (and per IP where known), so kennitalas can't be guessed by brute force.
+- **Rate limits**: besides login and sign-up, kennitala lookups and checks, new reviews, new profiles and reports are rate limited per account (and per IP where known), so kennitalas can't be guessed by brute force. The IP is only known on Vercel, or behind your own proxy with `TRUST_PROXY_HEADERS=true`. Without it, sign-up and logged-out reports have no limit at all, and since accounts are free, the per-account lookup limits can be multiplied by creating more accounts, so don't self-host without a trusted IP.
 - **Database**: with `DATABASE_URL` set, the app uses that Postgres database. Without it, the app uses the embedded database locally, or shows setup instructions on Vercel.
 
 ## Moderation

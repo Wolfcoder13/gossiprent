@@ -6,6 +6,7 @@ import {
   desc,
   eq,
   inArray,
+  isNotNull,
   isNull,
   like,
   ne,
@@ -18,10 +19,10 @@ import { alias } from "drizzle-orm/pg-core";
 import { cache } from "react";
 import { getDb } from "@/db";
 import { properties, reviews, users, type UserRole } from "@/db/schema";
-import { KENNITALA_SHAPED } from "@/lib/kennitala";
+import { hasKennitalaShape } from "@/lib/kennitala-pattern";
 import { placeName, postcodesMatching } from "@/lib/postcodes";
 import { reviewerRole } from "@/lib/roles";
-import { foldForSearch, propertyAddressKeys, SEARCH_FOLDS } from "@/lib/text";
+import { foldForSearch, normalizeUnit, propertyAddressKeys, SEARCH_FOLDS, UNIT_PREFIX_WORDS } from "@/lib/text";
 
 /*
  * Read queries for the public pages and the dashboard. Locale-free: the pages
@@ -80,8 +81,11 @@ export type PropertyListItem = {
   /** The postcode's place name ("Reykjavík"). */
   place: string;
   description: string | null;
-  /** hasAccount false: a renter named this landlord and they haven't confirmed it. */
-  landlord: { id: string; name: string; hasAccount: boolean } | null;
+  /**
+   * confirmed: the landlord listed or claimed the property themselves (false
+   * when a renter named them). hasAccount: they have an account now.
+   */
+  landlord: { id: string; name: string; hasAccount: boolean; confirmed: boolean } | null;
   /** Who added the property; null if their account is gone. */
   createdById: string | null;
   createdAt: Date;
@@ -160,9 +164,10 @@ export function parseSort(value: string | string[] | undefined): PersonSort {
 }
 
 /**
- * A trimmed, length-limited search string from a search param. Empty for a
- * kennitala-shaped query, which must never be searched or echoed (pages
- * redirect those to the lookup form first; this is the backstop).
+ * A trimmed, length-limited search string from a search param. Empty when any
+ * part of it looks like a kennitala ("Jón 150385-3579" too), which must never be
+ * searched or echoed (pages redirect those to the lookup form first; this is
+ * the backstop).
  */
 export function parseQuery(value: string | string[] | undefined): string {
   const raw = Array.isArray(value) ? value[0] : value;
@@ -170,7 +175,8 @@ export function parseQuery(value: string | string[] | undefined): string {
   // Cut by code points (not UTF-16 units) so an emoji is never split in half,
   // and drop any lone surrogates the raw input already had.
   const cleaned = raw?.replaceAll("\u0000", "").toWellFormed().replaceAll("\uFFFD", "").trim() ?? "";
-  if (KENNITALA_SHAPED.test(cleaned)) return "";
+  // Checked before the length cut, so a kennitala straddling it isn't half-echoed.
+  if (hasKennitalaShape(cleaned)) return "";
   const query = Array.from(cleaned).slice(0, 100).join("").trim();
   // A query with no words (e.g. just ",") would otherwise match everything.
   return searchTerms(query).length > 0 ? query : "";
@@ -189,15 +195,25 @@ export function searchTerms(query: string | undefined): string[] {
   return [...words].slice(0, 8);
 }
 
-// Words the site adds in front of an apartment number ("Njálsgata 23, íbúð 0201",
-// "apt. 0201") but that aren't stored (normalizeUnit strips them), folded.
-const UNIT_WORDS = new Set(["ibud", "ib", "ib.", "apt", "apt.", "unit", "#"]);
+// The words normalizeUnit strips from the front of an apartment ("íbúð 0201",
+// "apt. 0201") and the site shows in front of one, folded like search terms
+// ("ibud"), with and without a final period. They're never stored, so a search
+// word that is only one of them would match nothing.
+const UNIT_WORDS: ReadonlySet<string> = new Set(
+  [...UNIT_PREFIX_WORDS, "#"].flatMap((word) => {
+    const bare = foldForSearch(word).replace(/\.$/, "");
+    return bare ? [bare, `${bare}.`] : [];
+  }),
+);
 
-/** Property search words: an address copied from the site still matches. */
-function propertySearchTerms(query: string | undefined): string[] {
-  return searchTerms(query)
-    .filter((term) => !UNIT_WORDS.has(term))
-    .map((term) => term.replace(/^#(?=\d)/, ""));
+/**
+ * Property search words: each word as normalizeUnit would store it ("íbúð-0201"
+ * → "0201", "#4" → "4"), leaving out bare apartment words, so an address copied
+ * from the site, or typed the way the property form accepts it, still matches.
+ */
+export function propertySearchTerms(query: string | undefined): string[] {
+  const words = (query ?? "").split(/[\s,]+/).map((word) => normalizeUnit(word) ?? "");
+  return searchTerms(words.join(" ")).filter((term) => !UNIT_WORDS.has(term));
 }
 
 // A person's city has no stored search column, so fold it in SQL like foldForSearch
@@ -332,6 +348,7 @@ const propertyColumns = {
   landlordId: landlordUser.id,
   landlordName: landlordUser.name,
   landlordHasAccount: sql<boolean>`${landlordUser.passwordHash} is not null`,
+  landlordConfirmed: properties.landlordConfirmed,
 };
 
 type PropertyRow = {
@@ -339,13 +356,23 @@ type PropertyRow = {
   landlordId: string | null;
   landlordName: string | null;
   landlordHasAccount: boolean;
+  landlordConfirmed: boolean;
 };
 
-function toPropertyDetail<T extends PropertyRow>({ landlordId, landlordName, landlordHasAccount, ...rest }: T) {
+function toPropertyDetail<T extends PropertyRow>({
+  landlordId,
+  landlordName,
+  landlordHasAccount,
+  landlordConfirmed,
+  ...rest
+}: T) {
   return {
     ...rest,
     place: placeName(rest.postalCode),
-    landlord: landlordId && landlordName ? { id: landlordId, name: landlordName, hasAccount: landlordHasAccount } : null,
+    landlord:
+      landlordId && landlordName
+        ? { id: landlordId, name: landlordName, hasAccount: landlordHasAccount, confirmed: landlordConfirmed }
+        : null,
   };
 }
 
@@ -582,8 +609,26 @@ export async function listReviewsByAuthor(
   return { items, total };
 }
 
-export async function listRecentReviews(limit: number): Promise<ReviewItem[]> {
-  return queryReviews({ where: undefined, limit });
+/**
+ * Reviews whose subject's page search engines may index (spec §8): property
+ * reviews, and landlord reviews of an account or a company. Renters' pages and
+ * pages of people without an account are noindex, so their reviews mustn't
+ * show up on an indexed page such as the home page either.
+ */
+const ON_INDEXED_PAGES = or(
+  eq(reviews.kind, "property"),
+  and(eq(reviews.kind, "landlord"), or(isNotNull(subjectUser.passwordHash), eq(subjectUser.isCompany, true))),
+);
+
+/**
+ * The newest reviews. `indexedOnly`: only those whose subject's page may be
+ * indexed (see ON_INDEXED_PAGES), for a page that is indexed itself.
+ */
+export async function listRecentReviews(
+  limit: number,
+  { indexedOnly = false }: { indexedOnly?: boolean } = {},
+): Promise<ReviewItem[]> {
+  return queryReviews({ where: indexedOnly ? ON_INDEXED_PAGES : undefined, limit });
 }
 
 /** The review this author already wrote about the target, if any. */

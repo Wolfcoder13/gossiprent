@@ -3,8 +3,9 @@
  * Icelandic addresses and postcodes, duplicates), linking its landlord by
  * kennitala (someone on GossipRent, or a new profile without an account), the
  * "Check" button, claiming ("I manage this property"), unlinking ("Not my
- * property"), the creator changing the landlord while it has no account, and
- * the language of the messages.
+ * property", which sticks), the creator changing the landlord while it has no
+ * account (never to someone who reviewed the place or said it isn't theirs),
+ * whether the landlord confirmed the link, and the language of the messages.
  *
  * The races at the end only really race on a real Postgres (UNIT_DATABASE_URL;
  * see support/harness.ts); the embedded database runs one transaction at a time.
@@ -26,11 +27,11 @@ import { revalidatePath } from "next/cache";
 import { changeRole } from "@/app/actions/account";
 import { createProperty, updatePropertyLandlord, type PropertyFormState } from "@/app/actions/properties";
 import { saveReview } from "@/app/actions/reviews";
-import { authAttempts, properties, reviews, users } from "@/db/schema";
+import { authAttempts, properties, propertyDisclaimers, reviews, users } from "@/db/schema";
 import { createFormat } from "@/i18n/format";
 import { idleFormState, type FormState } from "@/lib/form-state";
 import { formatKennitala, parseKennitalaInput } from "@/lib/kennitala";
-import { findPersonByKennitala } from "@/lib/people";
+import { findPersonByKennitala, grantRoleById } from "@/lib/people";
 import {
   asVisitor,
   atOnce,
@@ -81,6 +82,9 @@ const RELINK_CLEARED = "Done. The property no longer has a landlord linked.";
 const NOT_CREATOR = "You can only change the landlord of a property you added.";
 const HAS_ACCOUNT =
   "The landlord has a GossipRent account, so only they can remove the link (with “Not my property”). If it's wrong, report this page.";
+const RELINK_REVIEWED = "This person has reviewed this property, so they can't be its landlord.";
+const RELINK_DISCLAIMED =
+  "This person has said this isn't their property, so you can't link them to it. Only they can link it again, with “I manage this property”.";
 const ONLY_LANDLORDS_OWN = "Only landlords can list a property as their own.";
 
 // ---------------------------------------------------------------------------
@@ -142,6 +146,22 @@ async function propertyRow(id: string) {
 
 async function landlordOf(propertyId: string): Promise<string | null> {
   return (await propertyRow(propertyId))!.landlordId;
+}
+
+/** The property's landlord and whether they confirmed the link themselves. */
+async function linkOf(propertyId: string) {
+  const { landlordId, landlordConfirmed } = (await propertyRow(propertyId))!;
+  return { landlordId, landlordConfirmed };
+}
+
+/** The people who said this property isn't theirs. */
+async function disclaimersOf(propertyId: string): Promise<string[]> {
+  const db = await getDb();
+  const rows = await db
+    .select({ userId: propertyDisclaimers.userId })
+    .from(propertyDisclaimers)
+    .where(eq(propertyDisclaimers.propertyId, propertyId));
+  return rows.map((row) => row.userId);
 }
 
 async function createdBy(userId: string): Promise<number> {
@@ -398,6 +418,22 @@ describe("createProperty: own or rent", () => {
     const owned = addedId(await add({ relation: "own" }));
     expect(await reviewProperty(rented)).toMatchObject({ status: "success" });
     expect(await reviewProperty(owned)).toMatchObject({ status: "error" });
+  });
+
+  it("listing it as your own confirms the link; naming its landlord as a renter doesn't", async () => {
+    const user = await createUser({ roles: "both" });
+    const landlord = await createUser({ roles: "landlord" });
+    await logInAs(user);
+    const owned = addedId(await add({ relation: "own" }));
+    expect(await linkOf(owned)).toEqual({ landlordId: user.id, landlordConfirmed: true });
+    const rented = addedId(await add({ relation: "rent", landlordKennitala: landlord.kennitala }));
+    expect(await linkOf(rented)).toEqual({ landlordId: landlord.id, landlordConfirmed: false });
+    const kennitala = freshKennitala();
+    const named = addedId(
+      await add({ relation: "rent", landlordKennitala: kennitala, landlordName: "Nýr Leigusali", confirmNewLandlord: "on" }),
+    );
+    expect(await linkOf(named)).toEqual({ landlordId: (await idsWithKennitala(kennitala))[0], landlordConfirmed: false });
+    expect(await linkOf(addedId(await add({ relation: "rent" })))).toEqual({ landlordId: null, landlordConfirmed: false });
   });
 
   it("a renter-only user isn't asked to choose; “own” can't make them the landlord", async () => {
@@ -704,7 +740,8 @@ describe("claim", () => {
     const property = await insertProperty({ landlordId: null, createdById: renter.id });
     await logInAs(landlord);
     expect(await landlordAction("claim", property.id)).toEqual({ status: "success", message: CLAIMED });
-    expect(await landlordOf(property.id)).toBe(landlord.id);
+    // Claiming it confirms the link.
+    expect(await linkOf(property.id)).toEqual({ landlordId: landlord.id, landlordConfirmed: true });
     expect(revalidatePath).toHaveBeenCalledWith(`/properties/${property.id}`);
     expect(revalidatePath).toHaveBeenCalledWith(`/landlords/${landlord.id}`);
   });
@@ -794,11 +831,28 @@ describe("claim", () => {
     expect(await landlordAction("claim", property.id)).toEqual({ status: "success", message: CLAIMED });
   });
 
-  it("claiming one you already manage just says it's yours", async () => {
+  it("claiming one you already manage just says it's yours, confirming a link a renter made", async () => {
     const user = await createUser({ roles: "landlord" });
-    const property = await insertProperty({ landlordId: user.id, createdById: user.id });
+    const renter = await createUser({ roles: "renter" });
+    const own = await insertProperty({ landlordId: user.id, createdById: user.id, landlordConfirmed: true });
+    const linked = await insertProperty({ landlordId: user.id, createdById: renter.id });
     await logInAs(user);
+    for (const property of [own, linked]) {
+      expect(await landlordAction("claim", property.id)).toEqual({ status: "success", message: CLAIMED });
+      expect(await linkOf(property.id)).toEqual({ landlordId: user.id, landlordConfirmed: true });
+    }
+  });
+
+  it("claiming a property you said wasn't yours takes that back", async () => {
+    const landlord = await createUser({ roles: "landlord" });
+    const renter = await createUser({ roles: "renter" });
+    const property = await insertProperty({ landlordId: landlord.id, createdById: renter.id });
+    await logInAs(landlord);
+    expect((await landlordAction("unlink", property.id)).message).toBe(UNLINKED);
+    expect(await disclaimersOf(property.id)).toEqual([landlord.id]);
     expect(await landlordAction("claim", property.id)).toEqual({ status: "success", message: CLAIMED });
+    expect(await linkOf(property.id)).toEqual({ landlordId: landlord.id, landlordConfirmed: true });
+    expect(await disclaimersOf(property.id)).toEqual([]);
   });
 });
 
@@ -814,7 +868,13 @@ describe("unlink (“Not my property”)", () => {
     const reviewId = await insertReview({ kind: "property", authorId: renter.id, propertyId: property.id });
     await logInAs(landlord);
     expect(await landlordAction("unlink", property.id)).toEqual({ status: "success", message: UNLINKED });
-    expect(await propertyRow(property.id)).toMatchObject({ landlordId: null, createdById: renter.id });
+    expect(await propertyRow(property.id)).toMatchObject({
+      landlordId: null,
+      landlordConfirmed: false,
+      createdById: renter.id,
+    });
+    // Recorded, so whoever added it can't link them again.
+    expect(await disclaimersOf(property.id)).toEqual([landlord.id]);
     const db = await getDb();
     expect(await db.select({ id: reviews.id }).from(reviews).where(eq(reviews.propertyId, property.id))).toEqual([
       { id: reviewId },
@@ -848,6 +908,7 @@ describe("unlink (“Not my property”)", () => {
     newVisitor();
     expect(await landlordAction("unlink", property.id)).toEqual({ status: "error", message: LOG_IN_AGAIN });
     expect(await landlordOf(property.id)).toBe(owner.id);
+    expect(await disclaimersOf(property.id)).toEqual([]);
   });
 
   it("unlinking twice: the second time says you aren't listed", async () => {
@@ -856,6 +917,7 @@ describe("unlink (“Not my property”)", () => {
     await logInAs(landlord);
     expect((await landlordAction("unlink", property.id)).message).toBe(UNLINKED);
     expect(await landlordAction("unlink", property.id)).toEqual({ status: "error", message: NOT_LISTED });
+    expect(await disclaimersOf(property.id)).toEqual([landlord.id]);
   });
 
   it("rejects a missing or malformed property id", async () => {
@@ -1033,6 +1095,109 @@ describe("relink (the creator changes the landlord)", () => {
     expect(await landlordOf(property.id)).toBe(profile.id);
     expect(await relink(randomUUID(), "")).toEqual({ status: "error", message: MISSING });
   });
+
+  it("can't link back a landlord who said “Not my property”, by saving or checking; they can claim it back", async () => {
+    const renter = await createUser({ roles: "renter" });
+    const landlord = await createUser({ roles: "landlord" });
+    await logInAs(renter);
+    const id = addedId(await add({ landlordKennitala: landlord.kennitala }));
+    const elsewhere = await insertProperty({ landlordId: null, createdById: renter.id });
+    await logInAs(landlord);
+    expect((await landlordAction("unlink", id)).message).toBe(UNLINKED);
+
+    await logInAs(renter);
+    const refused = {
+      status: "error",
+      message: FIX,
+      fieldErrors: { landlordKennitala: [RELINK_DISCLAIMED] },
+      values: { landlordKennitala: landlord.kennitala },
+    };
+    expect(await relink(id, landlord.kennitala)).toMatchObject(refused);
+    // Checking says the same, without saying who has the kennitala.
+    const checked = await landlordAction("check", id, { landlordKennitala: landlord.kennitala });
+    expect(checked).toMatchObject(refused);
+    expect(checked.landlord).toBeUndefined();
+    // Both looked the kennitala up.
+    expect(await checksBy(renter)).toBe(3);
+    expect(await linkOf(id)).toEqual({ landlordId: null, landlordConfirmed: false });
+    // Only for that property.
+    expect(await relink(elsewhere.id, landlord.kennitala)).toEqual({ status: "success", message: RELINKED });
+
+    // They can still claim it themselves.
+    await logInAs(landlord);
+    expect(await landlordAction("claim", id)).toEqual({ status: "success", message: CLAIMED });
+    expect(await linkOf(id)).toEqual({ landlordId: landlord.id, landlordConfirmed: true });
+  });
+
+  it("can't link back someone who stopped being a landlord, or give them the role again", async () => {
+    const renter = await createUser({ roles: "renter" });
+    const user = await createUser({ roles: "both" });
+    await logInAs(renter);
+    const id = addedId(await add({ landlordKennitala: user.kennitala }));
+    await logInAs(user);
+    expect(await removeLandlordRole()).toMatchObject({ status: "success" });
+    expect(await landlordOf(id)).toBeNull();
+
+    await logInAs(renter);
+    expect(await relink(id, user.kennitala)).toMatchObject({
+      fieldErrors: { landlordKennitala: [RELINK_DISCLAIMED] },
+    });
+    expect(await landlordOf(id)).toBeNull();
+    expect(await userRow(user.id)).toMatchObject({ isLandlord: false, isRenter: true });
+  });
+
+  it("can't make someone the landlord of a place they reviewed, by saving or checking; the role isn't granted", async () => {
+    const renter = await createUser({ roles: "renter" });
+    const reviewer = await createUser({ roles: "renter" });
+    const property = await insertProperty({ landlordId: null, createdById: renter.id });
+    await insertReview({ kind: "property", authorId: reviewer.id, propertyId: property.id });
+    const unreviewed = await insertProperty({ landlordId: null, createdById: renter.id });
+    await logInAs(renter);
+
+    const refused = {
+      status: "error",
+      message: FIX,
+      fieldErrors: { landlordKennitala: [RELINK_REVIEWED] },
+      values: { landlordKennitala: formatKennitala(reviewer.kennitala) },
+    };
+    expect(await relink(property.id, formatKennitala(reviewer.kennitala))).toMatchObject(refused);
+    expect(
+      await landlordAction("check", property.id, { landlordKennitala: formatKennitala(reviewer.kennitala) }),
+    ).toMatchObject(refused);
+    expect(await landlordOf(property.id)).toBeNull();
+    expect(await userRow(reviewer.id)).toMatchObject({ isLandlord: false, isRenter: true });
+
+    // Also when replacing a landlord without an account; the old one stays.
+    const profile = await createUser({ roles: "landlord", account: false });
+    const linked = await insertProperty({ landlordId: profile.id, createdById: renter.id });
+    await insertReview({ kind: "property", authorId: reviewer.id, propertyId: linked.id });
+    expect(await relink(linked.id, reviewer.kennitala)).toMatchObject({
+      fieldErrors: { landlordKennitala: [RELINK_REVIEWED] },
+    });
+    expect(await landlordOf(linked.id)).toBe(profile.id);
+    expect(await userRow(profile.id)).not.toBeNull();
+
+    // A place they didn't review is fine.
+    expect(await relink(unreviewed.id, reviewer.kennitala)).toEqual({ status: "success", message: RELINKED });
+    expect(await landlordOf(unreviewed.id)).toBe(reviewer.id);
+  });
+
+  it("a landlord the creator links hasn't confirmed it, even in place of one who had", async () => {
+    const renter = await createUser({ roles: "renter" });
+    // A landlord who claimed the place, then closed their account (still linked, no account).
+    const closed = await createUser({ roles: "landlord", account: false });
+    const property = await insertProperty({ landlordId: closed.id, createdById: renter.id, landlordConfirmed: true });
+    await logInAs(renter);
+    // The same landlord again changes nothing.
+    expect(await relink(property.id, closed.kennitala)).toEqual({ status: "success", message: RELINKED });
+    expect(await linkOf(property.id)).toEqual({ landlordId: closed.id, landlordConfirmed: true });
+
+    const other = await createUser({ roles: "landlord", account: false });
+    expect(await relink(property.id, other.kennitala)).toEqual({ status: "success", message: RELINKED });
+    expect(await linkOf(property.id)).toEqual({ landlordId: other.id, landlordConfirmed: false });
+    expect(await relink(property.id, "")).toEqual({ status: "success", message: RELINK_CLEARED });
+    expect(await linkOf(property.id)).toEqual({ landlordId: null, landlordConfirmed: false });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1079,6 +1244,32 @@ describe("in Icelandic (the default language)", () => {
     expect(await landlordAction("unlink", existing.id)).toEqual({
       status: "error",
       message: "Eignin er ekki tengd við þig sem leigusala.",
+    });
+  });
+
+  it("says in Icelandic why someone can't be linked to the property", async () => {
+    const renter = await createUser({ roles: "renter" });
+    const landlord = await createUser({ roles: "landlord" });
+    const reviewer = await createUser({ roles: "renter" });
+    const property = await insertProperty({ landlordId: landlord.id, createdById: renter.id });
+    await insertReview({ kind: "property", authorId: reviewer.id, propertyId: property.id });
+    await logInAs(landlord);
+    await landlordAction("unlink", property.id);
+
+    await logInAs(renter);
+    inIcelandic();
+    expect(await relink(property.id, landlord.kennitala)).toMatchObject({
+      message: "Lagaðu merktu reitina.",
+      fieldErrors: {
+        landlordKennitala: [
+          "Viðkomandi hefur sagt að eignin sé ekki sín, svo ekki er hægt að tengja viðkomandi við hana. Aðeins viðkomandi getur tengt hana við sig aftur, með „Ég er leigusali hér“.",
+        ],
+      },
+    });
+    expect(await landlordAction("check", property.id, { landlordKennitala: reviewer.kennitala })).toMatchObject({
+      fieldErrors: {
+        landlordKennitala: ["Viðkomandi hefur skrifað umsögn um þessa eign og getur því ekki verið leigusali hennar."],
+      },
     });
   });
 });
@@ -1230,6 +1421,63 @@ describe.runIf(usingPostgres)("at the same moment", () => {
       if (claimed.status === "error") expect(claimed.message, detail).toBe(CLAIM_AFTER_REVIEW);
     }
   }, 60_000);
+
+  it("a claim and the creator linking the same landlord at once: no deadlock, and the landlord confirmed it", async () => {
+    for (let i = 0; i < 12; i++) {
+      const renter = await createUser({ roles: "renter" });
+      const landlord = await createUser({ roles: "landlord" });
+      const property = await insertProperty({ landlordId: null, createdById: renter.id });
+      const asRenter = await logInAs(renter);
+      const asLandlord = await logInAs(landlord);
+      const [claimed, relinked] = await atOnce(
+        () => asVisitor(asLandlord, () => landlordAction("claim", property.id)),
+        () => asVisitor(asRenter, () => relink(property.id, landlord.kennitala)),
+        i,
+      );
+      const detail = `run ${i}: claim → ${claimed.message}; relink → ${relinked.message}`;
+      expect(claimed, detail).toEqual({ status: "success", message: CLAIMED });
+      // Linked first (then claimed), or refused because the claim came first.
+      expect([RELINKED, HAS_ACCOUNT], detail).toContain(relinked.message);
+      expect(await linkOf(property.id), detail).toEqual({ landlordId: landlord.id, landlordConfirmed: true });
+    }
+  }, 60_000);
+
+  it("an old landlord's profile that another transaction had locked is reconciled once the relink commits", async () => {
+    const renter = await createUser({ roles: "renter" });
+    const profile = await createUser({ roles: "landlord", account: false });
+    const property = await insertProperty({ landlordId: profile.id, createdById: renter.id });
+    await logInAs(renter);
+    const db = await getDb();
+    let locked!: () => void;
+    const isLocked = new Promise<void>((resolve) => (locked = resolve));
+    let finish!: () => void;
+    const finished = new Promise<void>((resolve) => (finish = resolve));
+    const giveUp = new Error("the review was never saved");
+
+    // Someone starts reviewing the profile (granting the role locks the row), then gives up.
+    const reviewing = db
+      .transaction(async (tx) => {
+        expect(await grantRoleById(tx, profile.id, profile.kennitala, "landlord")).toBe(true);
+        locked();
+        await finished;
+        throw giveUp;
+      })
+      .catch((error: unknown) => {
+        if (error !== giveUp) throw error;
+      });
+    await isLocked;
+
+    // The relink commits, skipping the locked profile, then waits to reconcile it.
+    const relinking = relink(property.id, "");
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(await landlordOf(property.id)).toBeNull();
+    expect(await userRow(profile.id)).not.toBeNull();
+    finish();
+    await reviewing;
+    expect(await relinking).toEqual({ status: "success", message: RELINK_CLEARED });
+    // Nothing refers to it any more.
+    expect(await userRow(profile.id)).toBeNull();
+  });
 
   it("relinking while the old landlord signs up never moves the property away from an account", async () => {
     for (let i = 0; i < 10; i++) {

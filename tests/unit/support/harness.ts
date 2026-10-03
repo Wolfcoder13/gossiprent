@@ -298,10 +298,15 @@ export async function createUser(options: {
 
 export type TestProperty = { id: string; address: string; unit: string | null; postalCode: number };
 
-/** Insert a property directly; the address defaults to a unique street in 101 Reykjavík. */
+/**
+ * Insert a property directly; the address defaults to a unique street in 101
+ * Reykjavík. `landlordConfirmed` (default false) is whether the landlord
+ * confirmed the link themselves (listed it as their own, or claimed it).
+ */
 export async function insertProperty(options: {
   landlordId: string | null;
   createdById: string | null;
+  landlordConfirmed?: boolean;
   address?: string;
   unit?: string | null;
   postalCode?: number;
@@ -317,6 +322,7 @@ export async function insertProperty(options: {
       postalCode,
       description: options.description ?? null,
       landlordId: options.landlordId,
+      landlordConfirmed: options.landlordConfirmed ?? false,
       createdById: options.createdById,
     })
     .returning({ id: properties.id });

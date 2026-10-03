@@ -1,28 +1,39 @@
 import { expect, test, type Browser, type Locator, type Page } from "@playwright/test";
 import {
   addProperty,
+  birthDate,
   cardMeta,
   cardNames,
   cardSubtitle,
   checkLandlordButton,
   clickAndCancel,
   clickAndConfirm,
+  COMPANY_NO_ACCOUNT_NOTE,
+  confirmMessage,
   confirmNewLandlordCheckbox,
   createActor,
   DEMO,
   escapeRegExp,
+  expectNoKennitalaOnPage,
+  expectRelinkRefused,
   fillLandlordFields,
   fillLogin,
   fillPropertyForm,
   findPersonPath,
   findPropertyPath,
+  firstName,
+  FIX_FIELDS,
   formAlert,
   formatKennitala,
   formStatus,
   freshKennitala,
-  kennitalaVariants,
+  horizontalOverflow,
+  idOf,
+  INVALID_KENNITALA,
   landlordFoundAnswer,
   landlordKennitalaInput,
+  landlordLine,
+  landlordLink,
   landlordNameInput,
   landlordNotFoundAnswer,
   logInAs,
@@ -31,18 +42,30 @@ import {
   makeReview,
   makeUser,
   myProfilePath,
+  NO_ACCOUNT_NOTE,
+  NO_LANDLORD,
+  noAccountBadge,
+  noLandlord,
   nameToken,
   NOT_A_KENNITALA,
   type NewProperty,
+  openRelinkForm,
+  personCard,
+  personName,
   postReview,
+  propertyCard,
   propertyLabel,
   propertyPlace,
   relationGroup,
   relinkForm,
   reviewCard,
+  saveLandlordButton,
   setLanguage,
   signUp,
+  thisMonth,
   uid,
+  unconfirmedNote,
+  withoutJavaScript,
 } from "./helpers";
 
 /*
@@ -55,8 +78,6 @@ import {
 
 const CLAIM = "I manage this property";
 const UNLINK = "Not my property";
-const NO_LANDLORD = "No landlord linked";
-const UNCONFIRMED = "Added by a renter, not confirmed";
 const CLAIMED = "Done. You're now listed as this property's landlord.";
 const UNLINKED = "Done. You're no longer listed as this property's landlord.";
 const ALREADY_MANAGED = "Another landlord already manages this property.";
@@ -66,34 +87,19 @@ const RELINKED = "Done. The property's landlord was changed.";
 const RELINK_CLEARED = "Done. The property no longer has a landlord linked.";
 const RELINK_HAS_ACCOUNT =
   "The landlord has a GossipRent account, so only they can remove the link (with “Not my property”). If it's wrong, report this page.";
-const FIX_FIELDS = "Please fix the highlighted fields.";
+/** The creator tried to link someone who said "Not my property" (or dropped the landlord role). */
+const RELINK_DISCLAIMED =
+  "This person has said this isn't their property, so you can't link them to it. Only they can link it again, with “I manage this property”.";
+/** The creator tried to link someone who has reviewed the property. */
+const RELINK_REVIEWED = "This person has reviewed this property, so they can't be its landlord.";
 const OWN_KENNITALA = "That's your own kennitala. You can't be the landlord of a place you rent.";
 const MINOR = "This kennitala can't be linked as a landlord.";
-const INVALID_KENNITALA = "That isn't a valid kennitala. Enter 10 digits, e.g. 123456-7890.";
 const NAME_REQUIRED = "Nobody with this kennitala is on GossipRent yet. Enter the landlord's name.";
 const CONFIRM_REQUIRED = "Tick the box to confirm the kennitala is right.";
 const PERSON_NAME_CHARS = "Use only letters, spaces, hyphens, apostrophes and periods in a name.";
 const COMPANY = "This is a company's kennitala.";
 const OWNER_NOTE = "You're the landlord for this property. Reviews from your renters appear here.";
 const NOT_FOUND = "We couldn't find that page";
-
-/** "Landlord: <name>" on a property page. */
-function landlordLine(page: Page, name: string): Locator {
-  return page.getByRole("main").getByText(`Landlord: ${name}`, { exact: true });
-}
-
-function unconfirmedNote(page: Page): Locator {
-  return page.getByRole("main").getByText(UNCONFIRMED, { exact: true });
-}
-
-function noLandlord(page: Page): Locator {
-  return page.getByRole("main").getByText(NO_LANDLORD, { exact: true });
-}
-
-/** The link to the landlord's page in the landlord line. */
-function landlordLink(page: Page, name: string): Locator {
-  return landlordLine(page, name).getByRole("link", { name, exact: true });
-}
 
 /** The add-property form's postcode select. */
 function postcodeSelect(page: Page): Locator {
@@ -106,48 +112,6 @@ async function fillAddress(page: Page, property: NewProperty): Promise<void> {
   await page.getByLabel("Apartment").fill(property.unit ?? "");
   await postcodeSelect(page).selectOption(property.postalCode);
   await page.getByLabel("Short description").fill(property.description ?? "");
-}
-
-/** Open the creator's "Change the landlord" / "Link the landlord" form. */
-async function openRelinkForm(page: Page): Promise<Locator> {
-  const form = relinkForm(page);
-  await form.locator("summary").click();
-  await expect(landlordKennitalaInput(form)).toBeVisible();
-  return form;
-}
-
-function saveLandlordButton(scope: Page | Locator): Locator {
-  return scope.getByRole("button", { name: "Save landlord", exact: true });
-}
-
-/** How the app shows a kennitala's birth date ("15 May 1980"): DDMMYY plus the century digit (9 = 1900s, 0 = 2000s). */
-function birthDateOf(kennitala: string): string {
-  const century = { "8": 1800, "9": 1900, "0": 2000 }[kennitala[9]]!;
-  const date = new Date(
-    Date.UTC(century + Number(kennitala.slice(4, 6)), Number(kennitala.slice(2, 4)) - 1, Number(kennitala.slice(0, 2)), 12),
-  );
-  return new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric" }).format(date);
-}
-
-/** "October 2026", as "Listed …" shows the month a property was added. */
-function thisMonth(): string {
-  return new Intl.DateTimeFormat("en-GB", { month: "long", year: "numeric", timeZone: "Atlantic/Reykjavik" }).format(
-    new Date(),
-  );
-}
-
-/** The kennitala appears nowhere in the page's HTML or its URL. */
-async function expectNoKennitala(page: Page, kennitala: string): Promise<void> {
-  const html = await page.content();
-  for (const variant of kennitalaVariants(kennitala)) {
-    expect(html, `${page.url()} contains ${variant}`).not.toContain(variant);
-    expect(page.url()).not.toContain(variant);
-  }
-}
-
-/** A name for a new landlord (letters only, as a person's name must be). */
-function landlordName(): string {
-  return `Leifur ${nameToken()}`;
 }
 
 test.describe("adding a property as a renter", () => {
@@ -171,7 +135,7 @@ test.describe("adding a property as a renter", () => {
     await fillPropertyForm(page, property);
     await expect(page).toHaveURL(/\/properties\/[0-9a-f-]{36}$/);
     const path = new URL(page.url()).pathname;
-    const id = path.split("/").pop()!;
+    const id = idOf(path);
 
     await expect(page.getByRole("heading", { level: 1, name: label })).toBeVisible();
     await expect(page).toHaveTitle(`${label}, ${propertyPlace(property)} — reviews · GossipRent`);
@@ -197,7 +161,7 @@ test.describe("adding a property as a renter", () => {
 
     await page.goto(`/properties?q=${encodeURIComponent(property.address)}`);
     await expect(page.getByText(`1 property matching “${property.address}”`)).toBeVisible();
-    const card = page.getByRole("main").getByRole("link", { name: new RegExp(escapeRegExp(label)) });
+    const card = propertyCard(page, property);
     await expect(card).toHaveAttribute("href", path);
     await expect(card).toContainText(propertyPlace(property));
     await expect(card).toContainText("Landlord not on GossipRent yet");
@@ -252,25 +216,34 @@ test.describe("adding a property as a renter", () => {
     await expect(page.getByRole("heading", { level: 1, name: `${street} 7, apt. 0304`, exact: true })).toBeVisible();
     await expect(page.getByText("105 Reykjavík", { exact: true })).toBeVisible();
 
-    // An apartment that isn't a 3–4 digit number is shown as typed.
+    // A short or lettered apartment number keeps its "apt." too, however the word before it was typed.
+    await addProperty(page, { address: `${street} 11`, unit: "íb. 2B", postalCode: "105" });
+    await expect(page.getByRole("heading", { level: 1, name: `${street} 11, apt. 2B`, exact: true })).toBeVisible();
+
+    // A unit that isn't an apartment number is shown as typed.
     await addProperty(page, { address: `${street} 9`, unit: "2. hæð til vinstri", postalCode: "105" });
     await expect(
       page.getByRole("heading", { level: 1, name: `${street} 9, 2. hæð til vinstri`, exact: true }),
     ).toBeVisible();
 
-    // "apt." is dropped too: it's the same apartment as before.
-    await page.goto("/properties/new");
-    await fillPropertyForm(page, { address: `${street} 7`, unit: "apt. 0304", postalCode: "105" });
-    await expect(formAlert(page)).toHaveText("This property is already listed on GossipRent. Go to the existing listing");
-    await expect(page.getByRole("link", { name: "Go to the existing listing" })).toHaveAttribute("href", path);
+    // "apt." is dropped too, with or without a space or punctuation after it: it's the same apartment as before.
+    for (const unit of ["apt. 0304", "íbúð-0304", "Íbúð: 0304"]) {
+      await page.goto("/properties/new");
+      await fillPropertyForm(page, { address: `${street} 7`, unit, postalCode: "105" });
+      await expect(formAlert(page), unit).toHaveText(
+        "This property is already listed on GossipRent. Go to the existing listing",
+      );
+      await expect(page.getByRole("link", { name: "Go to the existing listing" })).toHaveAttribute("href", path);
+    }
   });
 
   test("optional fields can be left blank", async ({ page }) => {
     await signUp(page, makeUser("renter"));
-    const property = makeProperty({ unit: undefined, description: undefined, postalCode: "600" });
+    // A town no other spec counts search results for (browse.spec counts Akureyri's).
+    const property = makeProperty({ unit: undefined, description: undefined, postalCode: "640" });
     await addProperty(page, property);
     await expect(page.getByRole("heading", { level: 1, name: property.address, exact: true })).toBeVisible();
-    await expect(page.getByText("600 Akureyri", { exact: true })).toBeVisible();
+    await expect(page.getByText("640 Húsavík", { exact: true })).toBeVisible();
     await expect(noLandlord(page)).toBeVisible();
   });
 
@@ -346,15 +319,12 @@ test.describe("the landlord's kennitala", () => {
     await expect(unconfirmedNote(page)).toHaveCount(0);
     // A landlord with an account can't be changed by the renter who added it.
     await expect(relinkForm(page)).toHaveCount(0);
-    await expectNoKennitala(page, landlord.user.kennitala);
+    await expectNoKennitalaOnPage(page, landlord.user.kennitala);
 
     await page.goto(landlord.profilePath);
     await expect(page.getByRole("heading", { name: "Properties (1)" })).toBeVisible();
-    await expect(page.getByRole("link", { name: new RegExp(escapeRegExp(propertyLabel(property))) })).toHaveAttribute(
-      "href",
-      path,
-    );
-    await expectNoKennitala(page, landlord.user.kennitala);
+    await expect(propertyCard(page, property)).toHaveAttribute("href", path);
+    await expectNoKennitalaOnPage(page, landlord.user.kennitala);
 
     await landlord.page.goto("/dashboard");
     await expect(landlord.page.getByRole("heading", { name: "Your properties (1)", exact: true })).toBeVisible();
@@ -370,7 +340,7 @@ test.describe("the landlord's kennitala", () => {
   }) => {
     await signUp(page, makeUser("renter"));
     const kennitala = freshKennitala();
-    const name = landlordName();
+    const name = personName("Leifur");
     const property = makeProperty();
     await page.goto("/properties/new");
     await fillAddress(page, property);
@@ -380,7 +350,7 @@ test.describe("the landlord's kennitala", () => {
     await expect(landlordNotFoundAnswer(page)).toBeVisible();
     await expect(landlordNotFoundAnswer(page).locator("..")).toBeFocused();
     // The birth date helps spot a typo.
-    await expect(page.getByText(`Date of birth: ${birthDateOf(kennitala)}`, { exact: true })).toBeVisible();
+    await expect(page.getByText(`Date of birth: ${birthDate(kennitala)}`, { exact: true })).toBeVisible();
     await expect(page.getByText(COMPANY)).toHaveCount(0);
     await expect(landlordNameInput(page)).toBeVisible();
     await expect(landlordNameInput(page)).toHaveValue("");
@@ -396,7 +366,7 @@ test.describe("the landlord's kennitala", () => {
     await expect(unconfirmedNote(page)).toBeVisible();
     // The creator can still change it while the landlord has no account.
     await expect(relinkForm(page).locator("summary")).toHaveText("Change the landlord");
-    await expectNoKennitala(page, kennitala);
+    await expectNoKennitalaOnPage(page, kennitala);
 
     // The landlord now has a page of their own (without an account).
     const landlordPath = await landlordLink(page, name).getAttribute("href");
@@ -404,20 +374,20 @@ test.describe("the landlord's kennitala", () => {
     await landlordLink(page, name).click();
     await expect(page).toHaveURL(landlordPath!);
     await expect(page.getByRole("heading", { level: 1, name })).toBeVisible();
-    await expect(page.getByText("No account", { exact: true }).first()).toBeVisible();
-    await expect(page.getByText("This person doesn't have a GossipRent account.", { exact: false })).toBeVisible();
+    await expect(noAccountBadge(page)).toBeVisible();
+    await expect(page.getByText(NO_ACCOUNT_NOTE, { exact: true })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Properties (1)" })).toBeVisible();
-    const card = page.getByRole("main").getByRole("link", { name: new RegExp(escapeRegExp(propertyLabel(property))) });
+    const card = propertyCard(page, property);
     await expect(card).toHaveAttribute("href", path);
     await expect(card).toContainText(`Landlord: ${name} (not confirmed)`);
-    await expectNoKennitala(page, kennitala);
+    await expectNoKennitalaOnPage(page, kennitala);
 
     // Listed in the landlord directory, marked as having no account.
     await page.goto(`/landlords?q=${encodeURIComponent(name)}`);
-    const personCard = page.getByRole("main").getByRole("link", { name: new RegExp(escapeRegExp(name)) });
-    await expect(personCard).toHaveAttribute("href", landlordPath!);
-    expect(await cardMeta(personCard)).toEqual(["Landlord", "No account"]);
-    expect(await cardSubtitle(personCard)).toBe("1 property");
+    const landlordCard = personCard(page, name);
+    await expect(landlordCard).toHaveAttribute("href", landlordPath!);
+    expect(await cardMeta(landlordCard)).toEqual(["Landlord", "No account"]);
+    expect(await cardSubtitle(landlordCard)).toBe("1 property");
   });
 
   test("a company's kennitala: no date of birth, and a company name", async ({ page }) => {
@@ -443,7 +413,7 @@ test.describe("the landlord's kennitala", () => {
 
     await landlordLink(page, name).click();
     await expect(page.getByRole("heading", { level: 1, name })).toBeVisible();
-    await expect(page.getByText("This company doesn't have a GossipRent account.", { exact: false })).toBeVisible();
+    await expect(page.getByText(COMPANY_NO_ACCOUNT_NOTE, { exact: true })).toBeVisible();
     await expect(page.getByRole("link", { name: "Sign up with your kennitala" })).toHaveCount(0);
   });
 
@@ -476,7 +446,7 @@ test.describe("the landlord's kennitala", () => {
     await expect(confirmNewLandlordCheckbox(page)).toBeChecked();
 
     // The confirmation is required.
-    const name = landlordName();
+    const name = personName("Leifur");
     await landlordNameInput(page).fill(name);
     await confirmNewLandlordCheckbox(page).uncheck();
     await page.getByRole("button", { name: "Add property" }).click();
@@ -581,7 +551,7 @@ test.describe("the landlord's kennitala", () => {
     await page.getByLabel("Address", { exact: true }).press("Enter");
     await expect(formAlert(page)).toHaveText(FIX_FIELDS);
     await expect(page.getByText(NAME_REQUIRED, { exact: true })).toBeVisible();
-    const name = landlordName();
+    const name = personName("Leifur");
     await landlordNameInput(page).fill(name);
     await confirmNewLandlordCheckbox(page).check();
     await landlordNameInput(page).press("Enter");
@@ -593,11 +563,7 @@ test.describe("the landlord's kennitala", () => {
   test("works without JavaScript: “Check”, then save", async ({ page, browser }) => {
     const landlord = await createActor(browser, "landlord");
     await signUp(page, makeUser("renter"));
-    const context = await browser.newContext({
-      javaScriptEnabled: false,
-      storageState: await page.context().storageState(),
-    });
-    const noJs = await context.newPage();
+    const noJs = await withoutJavaScript(browser, page);
     await noJs.goto("/properties/new");
     const property = makeProperty();
     await noJs.getByLabel("Address", { exact: true }).fill(property.address);
@@ -615,7 +581,7 @@ test.describe("the landlord's kennitala", () => {
     await expect(landlordLine(noJs, landlord.user.name)).toBeVisible();
 
     // A new kennitala: the name and confirmation come back with the answer.
-    const name = landlordName();
+    const name = personName("Leifur");
     await noJs.goto("/properties/new");
     const other = makeProperty();
     await noJs.getByLabel("Address", { exact: true }).fill(other.address);
@@ -625,7 +591,7 @@ test.describe("the landlord's kennitala", () => {
     await expect(noJs).toHaveURL(/\/properties\/[0-9a-f-]{36}$/);
     await expect(landlordLine(noJs, name)).toBeVisible();
     await expect(unconfirmedNote(noJs)).toBeVisible();
-    await context.close();
+    await noJs.context().close();
     await landlord.context.close();
   });
 });
@@ -743,7 +709,7 @@ test.describe("the property page", () => {
       await expect(unconfirmedNote(page)).toBeVisible();
       await landlordLink(page, landlord.name).click();
       await expect(page.getByRole("heading", { level: 1, name: landlord.name })).toBeVisible();
-      await expect(page.getByText("No account", { exact: true }).first()).toBeVisible();
+      await expect(noAccountBadge(page)).toBeVisible();
     }
 
     // Nobody has claimed the property, and no renter named its landlord.
@@ -757,7 +723,7 @@ test.describe("the property page", () => {
   test("“Report this page” opens the report form about this property", async ({ page }) => {
     const { hamraborg } = DEMO.properties;
     const path = await findPropertyPath(page, hamraborg.address, propertyLabel(hamraborg));
-    const id = path.split("/").pop()!;
+    const id = idOf(path);
     await page.goto(path);
     const report = page.getByRole("link", { name: "Report this page" });
     await expect(report).toHaveAttribute("href", `/report?target=property&id=${id}`);
@@ -775,7 +741,6 @@ test.describe("claiming and unlinking a property", () => {
   test("a landlord claims a property a renter listed without a landlord", async ({ page, browser }) => {
     const renter = await createActor(browser, "renter");
     const property = makeProperty();
-    const label = propertyLabel(property);
     const path = await addProperty(renter.page, property);
     const review = makeReview(4, { body: "Nice flat, but nobody answered about the broken radiator." });
     await postReview(renter.page, path, review);
@@ -805,17 +770,15 @@ test.describe("claiming and unlinking a property", () => {
     // It shows on their profile, dashboard, and in the directories.
     await page.goto(landlordPath);
     await expect(page.getByRole("heading", { name: "Properties (1)" })).toBeVisible();
-    await expect(page.getByRole("link", { name: new RegExp(escapeRegExp(label)) })).toHaveAttribute("href", path);
+    await expect(propertyCard(page, property)).toHaveAttribute("href", path);
     await page.goto("/dashboard");
     await expect(page.getByRole("heading", { name: "Your properties (1)", exact: true })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Reviews of your properties (1)" })).toBeVisible();
     await expect(reviewCard(page, review.title)).toBeVisible();
     await page.goto(`/properties?q=${encodeURIComponent(property.address)}`);
-    await expect(page.getByRole("main").getByRole("link", { name: new RegExp(escapeRegExp(label)) })).toContainText(
-      `Landlord: ${landlord.name}`,
-    );
+    await expect(propertyCard(page, property)).toContainText(`Landlord: ${landlord.name}`);
     await page.goto(`/landlords?q=${encodeURIComponent(landlord.name)}`);
-    const card = page.getByRole("main").getByRole("link", { name: new RegExp(escapeRegExp(landlord.name)) });
+    const card = personCard(page, landlord.name);
     expect(await cardSubtitle(card)).toBe(`${landlord.city} · 1 property`);
 
     // The renter sees the new landlord, and can no longer change it (it has an account).
@@ -899,12 +862,7 @@ test.describe("claiming and unlinking a property", () => {
     await page.reload();
     await expect(landlordLine(page, landlord.name)).toBeVisible();
 
-    let message = "";
-    page.once("dialog", (dialog) => {
-      message = dialog.message();
-      void dialog.accept();
-    });
-    await page.getByRole("button", { name: UNLINK }).click();
+    const message = await confirmMessage(page, page.getByRole("button", { name: UNLINK }));
     await expect(formStatus(page)).toHaveText(UNLINKED);
     await expect(formStatus(page)).toBeFocused();
     await expect(noLandlord(page)).toBeVisible();
@@ -926,9 +884,27 @@ test.describe("claiming and unlinking a property", () => {
     await expect(noLandlord(renter.page)).toBeVisible();
     await expect(reviewCard(renter.page, review.title)).toBeVisible();
     await page.goto(`/properties?q=${encodeURIComponent(property.address)}`);
-    await expect(page.getByRole("main").getByRole("link", { name: new RegExp(escapeRegExp(label)) })).toContainText(
-      "Landlord not on GossipRent yet",
-    );
+    await expect(propertyCard(page, property)).toContainText("Landlord not on GossipRent yet");
+
+    // The renter who added the place can link a landlord again, but not this
+    // one: only they can, by claiming it. Checking or saving gives the same answer.
+    await renter.page.goto(path);
+    await expect(relinkForm(renter.page).locator("summary")).toHaveText("Link the landlord");
+    await expectRelinkRefused(renter.page, formatKennitala(landlord.kennitala), RELINK_DISCLAIMED);
+    await renter.page.reload();
+    await expect(noLandlord(renter.page)).toBeVisible();
+    await page.goto("/dashboard");
+    await expect(page.getByRole("heading", { name: "Your properties (0)", exact: true })).toBeVisible();
+
+    // The landlord can still claim it back.
+    await page.goto(path);
+    await page.getByRole("button", { name: CLAIM }).click();
+    await expect(formStatus(page)).toHaveText(CLAIMED);
+    await expect(landlordLine(page, landlord.name)).toBeVisible();
+    await expect(unconfirmedNote(page)).toHaveCount(0);
+    await renter.page.reload();
+    await expect(landlordLine(renter.page, landlord.name)).toBeVisible();
+    await expect(relinkForm(renter.page)).toHaveCount(0);
     await renter.context.close();
   });
 
@@ -1038,8 +1014,7 @@ test.describe("claiming without JavaScript", () => {
     const landlord = makeUser("landlord");
     await signUp(page, landlord);
 
-    const noJs = await browser.newContext({ javaScriptEnabled: false, storageState: await page.context().storageState() });
-    const noJsPage = await noJs.newPage();
+    const noJsPage = await withoutJavaScript(browser, page);
     await noJsPage.goto(path);
     await noJsPage.getByRole("button", { name: CLAIM }).click();
     await expect(landlordLine(noJsPage, landlord.name)).toBeVisible();
@@ -1049,7 +1024,7 @@ test.describe("claiming without JavaScript", () => {
     await noJsPage.getByRole("button", { name: UNLINK }).click();
     await expect(noLandlord(noJsPage)).toBeVisible();
     await expect(formStatus(noJsPage)).toHaveText(UNLINKED);
-    await noJs.close();
+    await noJsPage.context().close();
     await renter.context.close();
   });
 });
@@ -1057,7 +1032,7 @@ test.describe("claiming without JavaScript", () => {
 test.describe("changing the landlord (the renter who added the property)", () => {
   test("links, changes and removes a landlord without an account", async ({ page, browser }) => {
     await signUp(page, makeUser("renter"));
-    const first = { kennitala: freshKennitala(), name: landlordName() };
+    const first = { kennitala: freshKennitala(), name: personName("Leifur") };
     const path = await addProperty(page, makeProperty(), first);
     const firstPath = await landlordLink(page, first.name).getAttribute("href");
 
@@ -1072,9 +1047,9 @@ test.describe("changing the landlord (the renter who added the property)", () =>
     await expect(landlordKennitalaInput(form)).toHaveValue("");
 
     // Another kennitala nobody has: "Check", then the name and the confirmation.
-    const second = { kennitala: freshKennitala(), name: landlordName() };
+    const second = { kennitala: freshKennitala(), name: personName("Leifur") };
     await fillLandlordFields(form, second);
-    await expect(form.getByText(`Date of birth: ${birthDateOf(second.kennitala)}`, { exact: true })).toBeVisible();
+    await expect(form.getByText(`Date of birth: ${birthDate(second.kennitala)}`, { exact: true })).toBeVisible();
     await saveLandlordButton(form).click();
     await expect(formStatus(page)).toHaveText(RELINKED);
     await expect(formStatus(page)).toBeFocused();
@@ -1082,7 +1057,7 @@ test.describe("changing the landlord (the renter who added the property)", () =>
     await expect(unconfirmedNote(page)).toBeVisible();
     // The form closes after saving.
     await expect(landlordKennitalaInput(form)).toBeHidden();
-    await expectNoKennitala(page, second.kennitala);
+    await expectNoKennitalaOnPage(page, second.kennitala);
 
     // The first landlord's page only existed because of this link: it's gone.
     const response = await page.goto(firstPath!);
@@ -1121,7 +1096,7 @@ test.describe("changing the landlord (the renter who added the property)", () =>
 
   test("a landlord who has been reviewed keeps their page when the link changes", async ({ page }) => {
     await signUp(page, makeUser("renter"));
-    const landlord = { kennitala: freshKennitala(), name: landlordName() };
+    const landlord = { kennitala: freshKennitala(), name: personName("Leifur") };
     const path = await addProperty(page, makeProperty(), landlord);
     const landlordPath = (await landlordLink(page, landlord.name).getAttribute("href"))!;
     const review = makeReview(2);
@@ -1160,13 +1135,34 @@ test.describe("changing the landlord (the renter who added the property)", () =>
     await expect(noLandlord(page)).toBeVisible();
   });
 
+  test("someone who has reviewed the property can't be linked as its landlord", async ({ page, browser }) => {
+    await signUp(page, makeUser("renter"));
+    const path = await addProperty(page, makeProperty());
+    // Another renter reviews the place.
+    const reviewer = await createActor(browser, "renter");
+    const review = makeReview(4);
+    await postReview(reviewer.page, path, review);
+
+    await page.goto(path);
+    await expectRelinkRefused(page, formatKennitala(reviewer.user.kennitala), RELINK_REVIEWED);
+    await page.reload();
+    await expect(noLandlord(page)).toBeVisible();
+    // Nothing changed for them either: still not a landlord, and their review is still theirs to edit.
+    await reviewer.page.goto("/dashboard");
+    await expect(reviewer.page.locator("#roles")).toContainText("Not a landlord");
+    await reviewer.page.goto(path);
+    await expect(reviewCard(reviewer.page, review.title)).toBeVisible();
+    await expect(reviewer.page.getByRole("button", { name: "Update review" })).toBeVisible();
+    await reviewer.context.close();
+  });
+
   test("when the landlord signs up with that kennitala, the page is theirs and only they can change the link", async ({
     page,
     browser,
   }) => {
     const renter = await createActor(browser, "renter");
     const kennitala = freshKennitala();
-    const name = landlordName();
+    const name = personName("Leifur");
     const property = makeProperty();
     const path = await addProperty(renter.page, property, { kennitala, name });
     // The renter has the "Change the landlord" form open (to remove the link).
@@ -1176,7 +1172,7 @@ test.describe("changing the landlord (the renter who added the property)", () =>
     const landlord = makeUser("landlord", { kennitala, name: `Other ${nameToken()}` });
     await signUp(page, landlord);
     await expect(page).toHaveURL(/\/dashboard\?name=kept$/);
-    await expect(page.getByRole("heading", { level: 1, name: `Hi, ${name.split(" ")[0]}` })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: `Hi, ${firstName(name)}` })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Your properties (1)", exact: true })).toBeVisible();
     await page.goto(path);
     await expect(landlordLine(page, name)).toBeVisible();
@@ -1196,20 +1192,16 @@ test.describe("changing the landlord (the renter who added the property)", () =>
   test("works without JavaScript", async ({ page, browser }) => {
     await signUp(page, makeUser("renter"));
     const path = await addProperty(page, makeProperty());
-    const context = await browser.newContext({
-      javaScriptEnabled: false,
-      storageState: await page.context().storageState(),
-    });
-    const noJs = await context.newPage();
+    const noJs = await withoutJavaScript(browser, page);
     await noJs.goto(path);
     await relinkForm(noJs).locator("summary").click();
-    const name = landlordName();
+    const name = personName("Leifur");
     await fillLandlordFields(relinkForm(noJs), { kennitala: freshKennitala(), name });
     await saveLandlordButton(relinkForm(noJs)).click();
     await expect(formStatus(noJs)).toHaveText(RELINKED);
     await expect(landlordLine(noJs, name)).toBeVisible();
     await expect(unconfirmedNote(noJs)).toBeVisible();
-    await context.close();
+    await noJs.context().close();
   });
 });
 
@@ -1273,7 +1265,7 @@ test.describe("on a narrow phone (320px wide)", () => {
       }
       return worst;
     });
-    const inPage = await page.evaluate(() => document.scrollingElement!.scrollWidth - window.innerWidth);
+    const inPage = await horizontalOverflow(page);
     return { inRow, inPage };
   }
 
@@ -1323,8 +1315,7 @@ test.describe("on a narrow phone (320px wide)", () => {
     });
     await signUp(page, makeUser("renter"));
     await page.goto("/properties/new");
-    const widthOverflow = () => page.evaluate(() => document.scrollingElement!.scrollWidth - window.innerWidth);
-    expect(await widthOverflow(), "empty form").toBeLessThanOrEqual(0);
+    expect(await horizontalOverflow(page), "empty form").toBeLessThanOrEqual(0);
     await expect(postcodeSelect(page)).toBeInViewport();
 
     const property = makeProperty({ unit: `2. hæð til vinstri ${uid()}`.slice(0, 30) });
@@ -1334,19 +1325,19 @@ test.describe("on a narrow phone (320px wide)", () => {
     await landlordKennitalaInput(page).fill(landlord.user.kennitala);
     await checkLandlordButton(page).click();
     await expect(landlordFoundAnswer(page, landlord.user.name)).toBeVisible();
-    expect(await widthOverflow(), "found answer").toBeLessThanOrEqual(0);
+    expect(await horizontalOverflow(page), "found answer").toBeLessThanOrEqual(0);
 
     await landlordKennitalaInput(page).fill(freshKennitala());
     await checkLandlordButton(page).click();
     await expect(landlordNotFoundAnswer(page)).toBeVisible();
     await expect(landlordNameInput(page)).toBeVisible();
-    expect(await widthOverflow(), "not-found answer").toBeLessThanOrEqual(0);
+    expect(await horizontalOverflow(page), "not-found answer").toBeLessThanOrEqual(0);
 
     await landlordKennitalaInput(page).fill(landlord.user.kennitala);
     await page.getByRole("button", { name: "Add property" }).click();
     await expect(page).toHaveURL(/\/properties\/[0-9a-f-]{36}$/);
     await expect(landlordLine(page, landlord.user.name)).toBeVisible();
-    expect(await widthOverflow(), "property page").toBeLessThanOrEqual(0);
+    expect(await horizontalOverflow(page), "property page").toBeLessThanOrEqual(0);
     await landlord.context.close();
   });
 });
@@ -1373,15 +1364,6 @@ test.describe("in Icelandic", () => {
     return page.getByRole("main").getByText(IS.landlordLine(name), { exact: true });
   }
 
-  /** A kennitala's birth date as the Icelandic site shows it ("15. maí 1980"). */
-  function icelandicBirthDate(kennitala: string): string {
-    const century = { "8": 1800, "9": 1900, "0": 2000 }[kennitala[9]]!;
-    const date = new Date(
-      Date.UTC(century + Number(kennitala.slice(4, 6)), Number(kennitala.slice(2, 4)) - 1, Number(kennitala.slice(0, 2)), 12),
-    );
-    return new Intl.DateTimeFormat("is-IS", { day: "numeric", month: "short", year: "numeric" }).format(date);
-  }
-
   test("the property page: the address, who the landlord is, and the report link", async ({ page }) => {
     const { njalsgata, hamraborg } = DEMO.properties;
     // Found in English (the helper matches the English street line), then viewed in Icelandic.
@@ -1398,7 +1380,7 @@ test.describe("in Icelandic", () => {
     await expect(page.getByText(IS.unconfirmed)).toHaveCount(0);
     await expect(page.getByRole("link", { name: IS.report })).toHaveAttribute(
       "href",
-      `/report?target=property&id=${njalsgataPath.split("/").pop()}`,
+      `/report?target=property&id=${idOf(njalsgataPath)}`,
     );
 
     await page.goto(hamraborgPath);
@@ -1454,8 +1436,8 @@ test.describe("in Icelandic", () => {
     await kennitalaField.fill(kennitala);
     await check.click();
     await expect(page.getByText(IS.notFound, { exact: true })).toBeVisible();
-    await expect(page.getByText(`Fæðingardagur: ${icelandicBirthDate(kennitala)}`, { exact: true })).toBeVisible();
-    const name = landlordName();
+    await expect(page.getByText(`Fæðingardagur: ${birthDate(kennitala, "is")}`, { exact: true })).toBeVisible();
+    const name = personName("Leifur");
     await page.getByRole("textbox", { name: "Nafn leigusala" }).fill(name);
     await page.getByRole("checkbox", { name: "Ég hef gengið úr skugga um að kennitalan sé rétt" }).check();
     await submit.click();
@@ -1497,12 +1479,7 @@ test.describe("in Icelandic", () => {
       page.getByText("Þú ert leigusali þessarar eignar. Umsagnir leigjenda þinna birtast hér.", { exact: true }),
     ).toBeVisible();
 
-    let message = "";
-    page.once("dialog", (dialog) => {
-      message = dialog.message();
-      void dialog.accept();
-    });
-    await page.getByRole("button", { name: IS.unlink }).click();
+    const message = await confirmMessage(page, page.getByRole("button", { name: IS.unlink }));
     await expect(formStatus(page)).toHaveText(IS.unlinked);
     expect(message).toBe(IS.unlinkConfirm);
     await expect(page.getByRole("main").getByText(IS.noLandlord, { exact: true })).toBeVisible();

@@ -1,16 +1,16 @@
 "use server";
 
-import { and, eq, isNotNull, isNull, sql } from "drizzle-orm";
+import { and, eq, isNotNull, sql } from "drizzle-orm";
 import { redirect } from "next/navigation";
-import { getDb, pgConstraint, pgErrorCode, sanitizeDbError } from "@/db";
-import { users } from "@/db/schema";
+import { getDb, pgConstraint, pgErrorCode, sanitizeDbError, type Transaction } from "@/db";
+import { sessions, users } from "@/db/schema";
 import { getT, type T } from "@/i18n/server";
 import { hashPassword, simulatePasswordCheck, verifyPassword } from "@/lib/auth/password";
 import { clearAttempts, clientIp, consumeAttempt, RATE_LIMITS } from "@/lib/auth/rate-limit";
 import { createSession, deleteSession } from "@/lib/auth/session";
 import { isAdultKennitala, parseKennitalaInput } from "@/lib/kennitala";
 import { reportPath } from "@/lib/paths";
-import { nameLockedSql, personNameKeys } from "@/lib/people";
+import { isNameLocked, personNameKeys } from "@/lib/people";
 import type { FormState } from "@/lib/form-state";
 import { formValues, loginSchema, parseForm, safeRedirectPath, signupSchema } from "@/lib/validation";
 
@@ -41,9 +41,82 @@ function fieldError(t: T, formData: FormData, field: string, message: string, ex
   };
 }
 
-/** For the derived name columns: keep the stored value once others have described the person by name. */
-const keepIfNameLocked = (column: typeof users.name | typeof users.nameSort | typeof users.nameSearch, excluded: string) =>
-  sql`case when ${nameLockedSql()} then ${column} else ${sql.raw(`excluded.${excluded}`)} end`;
+// Signup retries when the profile it found was deleted before it could lock it.
+const SIGNUP_ATTEMPTS = 3;
+
+type SignupInput = {
+  kennitala: string;
+  keys: ReturnType<typeof personNameKeys>;
+  email: string;
+  passwordHash: string;
+  isLandlord: boolean;
+  isRenter: boolean;
+  city: string | null;
+};
+
+/**
+ * Create the account, or take over the profile without an account that has
+ * this kennitala. Null if the kennitala already has an account.
+ *
+ * In steps rather than one upsert, so the name-lock check sees a review or
+ * property link being written about this kennitala right now: those lock the
+ * row (or are inserting it), and each step waits for them.
+ */
+async function createOrTakeOver(tx: Transaction, input: SignupInput): Promise<{ id: string; name: string } | null> {
+  const { kennitala, keys, email, passwordHash, isLandlord, isRenter, city } = input;
+  for (let attempt = 0; attempt < SIGNUP_ATTEMPTS; attempt++) {
+    // 1. A new person. Waits for anyone inserting this kennitala right now.
+    const [created] = await guarded(() =>
+      tx
+        .insert(users)
+        .values({ kennitala, isCompany: false, ...keys, email, passwordHash, joinedAt: sql`now()`, isLandlord, isRenter, city })
+        .onConflictDoNothing({ target: users.kennitala })
+        .returning({ id: users.id, name: users.name }),
+    );
+    if (created) return created;
+
+    // 2. Someone already has it: lock their row, waiting for a review or
+    // property link in progress (their role grant locks it) to commit.
+    const [existing] = await guarded(() =>
+      tx
+        .select({ id: users.id, email: users.email })
+        .from(users)
+        .where(eq(users.kennitala, kennitala))
+        .for("update"),
+    );
+    // Deleted in between (reconcileProfiles): try the insert again.
+    if (!existing) continue;
+    // Only a profile without an account can be taken over.
+    if (existing.email !== null) return null;
+
+    // 3. New statements, so they see everything committed before the lock.
+    // Once others have described the person by name, the profile keeps it.
+    const locked = await isNameLocked(tx, existing.id);
+    const [account] = await guarded(() =>
+      tx
+        .update(users)
+        .set({
+          email,
+          passwordHash,
+          joinedAt: sql`now()`,
+          city,
+          bio: null,
+          // The roles they were reviewed or linked in stay; the ticked ones are added.
+          isLandlord: sql`${users.isLandlord} or ${isLandlord}`,
+          isRenter: sql`${users.isRenter} or ${isRenter}`,
+          ...(locked ? {} : keys),
+        })
+        .where(eq(users.id, existing.id))
+        .returning({ id: users.id, name: users.name }),
+    );
+    // A profile without an account is never signed in, but a session row can be
+    // left on it (e.g. a login that raced an operator reset): delete any, so
+    // none comes back to life as this new account.
+    await tx.delete(sessions).where(eq(sessions.userId, account.id));
+    return account;
+  }
+  throw new Error("signup: the profile was deleted repeatedly while being taken over");
+}
 
 /**
  * Sign up with a kennitala. If someone already reviewed that kennitala (or
@@ -69,42 +142,11 @@ export async function signup(_prev: FormState, formData: FormData): Promise<Form
   const passwordHash = await hashPassword(password);
   const keys = personNameKeys(name);
   const db = await getDb();
-  let account: { id: string; name: string } | undefined;
+  let account: { id: string; name: string } | null;
   try {
-    // One statement, so a review being written about this kennitala right now
-    // either lands first (and its role is kept) or waits for it.
-    [account] = await db
-      .insert(users)
-      .values({
-        kennitala,
-        isCompany: false,
-        ...keys,
-        email,
-        passwordHash,
-        joinedAt: sql`now()`,
-        isLandlord,
-        isRenter,
-        city,
-      })
-      .onConflictDoUpdate({
-        target: users.kennitala,
-        set: {
-          email: sql`excluded.email`,
-          passwordHash: sql`excluded.password_hash`,
-          joinedAt: sql`now()`,
-          city: sql`excluded.city`,
-          bio: null,
-          // The roles they were reviewed or linked in stay; the ticked ones are added.
-          isLandlord: sql`${users.isLandlord} or excluded.is_landlord`,
-          isRenter: sql`${users.isRenter} or excluded.is_renter`,
-          name: keepIfNameLocked(users.name, "name"),
-          nameSort: keepIfNameLocked(users.nameSort, "name_sort"),
-          nameSearch: keepIfNameLocked(users.nameSearch, "name_search"),
-        },
-        // Only a profile without an account can be taken over.
-        setWhere: isNull(users.email),
-      })
-      .returning({ id: users.id, name: users.name });
+    account = await db.transaction((tx) =>
+      createOrTakeOver(tx, { kennitala, keys, email, passwordHash, isLandlord, isRenter, city }),
+    );
   } catch (error) {
     if (pgErrorCode(error) === "23505" && pgConstraint(error) === "users_email_unique") {
       return fieldError(t, formData, "email", t("auth.signup.emailTaken"));
@@ -117,7 +159,8 @@ export async function signup(_prev: FormState, formData: FormData): Promise<Form
     });
   }
 
-  await createSession(account.id);
+  // Only if the password is still the one just set (an operator reset can't be undone by a slow request).
+  if (!(await createSession(account.id, { expectedHash: passwordHash }))) redirect("/login");
   let next = safeRedirectPath(formData.get("next"), "/dashboard");
   // The dashboard explains why the page kept the reviewers' name.
   if (account.name !== keys.name && next === "/dashboard") next = "/dashboard?name=kept";
@@ -162,10 +205,14 @@ export async function login(_prev: FormState, formData: FormData): Promise<FormS
     return { status: "error", message: t("auth.login.noMatch"), values: formValues(formData) };
   }
 
+  // Only while that is still the password: an account closed, reset or given a
+  // new password since the check above gets no session.
+  if (!(await createSession(user.id, { expectedHash: user.passwordHash! }))) {
+    return { status: "error", message: t("auth.login.noMatch"), values: formValues(formData) };
+  }
   // A successful login doesn't count, and forgets this network's earlier misses.
   await attempt.release();
   await guarded(() => clearAttempts([accountAndIpKey]));
-  await createSession(user.id);
   redirect(safeRedirectPath(formData.get("next"), "/dashboard"));
 }
 

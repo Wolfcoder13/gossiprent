@@ -17,12 +17,16 @@ export default {
   /** A profile without an account: when the first review about them was written. */
   firstReviewed: "Fyrsta umsögn í {date}",
   identityNotVerified: "Auðkenni ekki staðfest",
-  /** On a profile without an account. {signUp} is the signUp link. */
+  /**
+   * On a profile without an account. True however the page came to be: a review,
+   * a renter naming the landlord of a property, or a closed account. {signUp}
+   * is the signUp link.
+   */
   noAccountNote: {
     person:
-      "Viðkomandi er ekki með aðgang að GossipRent. Síðan varð til þegar fyrsta umsögnin var skrifuð og nafnið er það sem höfundur hennar sló inn. Ert þetta þú? {signUp} til að taka yfir síðuna. Umsagnir sem aðrir skrifuðu um þig verða áfram á henni.",
+      "Viðkomandi er ekki með aðgang að GossipRent og hefur ekki umsjón með þessari síðu. Aðrir gætu hafa slegið nafnið inn. Ert þetta þú? {signUp} til að taka yfir síðuna. Umsagnir sem aðrir skrifuðu um þig verða áfram á henni.",
     company:
-      "Þetta fyrirtæki er ekki með aðgang að GossipRent. Síðan varð til þegar fyrsta umsögnin var skrifuð og nafnið er það sem höfundur hennar sló inn.",
+      "Þetta fyrirtæki er ekki með aðgang að GossipRent og hefur ekki umsjón með þessari síðu. Aðrir gætu hafa slegið nafnið inn.",
   },
   signUp: "Stofnaðu aðgang með kennitölunni þinni",
   report: "Tilkynna þessa síðu",

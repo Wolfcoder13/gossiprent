@@ -59,7 +59,12 @@ async function ProfileFacts({ person }: { person: PublicUser }) {
   ) : null;
 }
 
-/** On a profile without an account: where the page and its name came from, and how to take it over. */
+/**
+ * On a profile without an account: nobody with an account manages it and its
+ * name may be someone else's typing, and (persons) how to take it over. Worded
+ * to be true however the page came to be: a review, a renter naming a
+ * property's landlord, or an account that was closed.
+ */
 async function NoAccountNote({ person }: { person: PublicUser }) {
   const t = await getT();
   return (

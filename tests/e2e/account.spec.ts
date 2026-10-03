@@ -1,69 +1,56 @@
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import {
   addProperty,
   cardMeta,
   cardSubtitle,
-  clickAndConfirm,
+  closeAccount,
+  closedNotice,
+  CLOSED_NOTICE,
+  confirmMessage,
+  CANT_REMOVE,
   createActor,
-  escapeRegExp,
+  expectNoKennitala,
   fillLogin,
   fillSignup,
+  firstName,
+  FIX_FIELDS,
   formAlert,
   formatKennitala,
   formStatus,
   freshKennitala,
-  kennitalaVariants,
+  idOf,
+  KEPT_NAME,
+  keptNameNotice,
+  landlordLine,
+  landlordLink,
   logIn,
   lookUpKennitala,
   makeProperty,
   makeReview,
   makeUser,
   myProfilePath,
+  NAME_LOCKED,
   nameToken,
+  NO_ACCOUNT_NOTE,
+  NO_MATCH,
+  noAccountBadge,
+  personCard,
   postReview,
+  propertyCard,
   propertyLabel,
   relinkForm,
   reviewCard,
   setLanguage,
   signUp,
+  unconfirmedNote,
   type TestUser,
 } from "./helpers";
-
-const CLOSED_NOTICE = "Your account is closed and the reviews you wrote have been deleted.";
-const CANT_REMOVE = "You can't remove reviews other people write about you, but you can report one that breaks the rules.";
-const NAME_LOCKED = "Your name can't be changed after people have reviewed you. If it's wrong, report it.";
-const NO_ACCOUNT_NOTE =
-  "This person doesn't have a GossipRent account. The page was created when the first review was written, and the name is the one its author entered. Is this you? Sign up with your kennitala to take over the page. Reviews others wrote about you stay on it.";
-const UNCONFIRMED = "Added by a renter, not confirmed";
-const NO_MATCH = "That email and password don't match an account.";
-
-/** The notice on the home page after closing an account (the page has other, empty, status lines). */
-function closedNotice(page: Page): Locator {
-  return page.getByRole("main").getByRole("status").filter({ hasText: CLOSED_NOTICE });
-}
-
-/** The "No account" badge on a profile page. */
-function noAccountBadge(page: Page): Locator {
-  return page.getByRole("main").getByText("No account", { exact: true });
-}
-
-/** Close the signed-in account from the dashboard and wait for the home page. */
-async function closeAccount(page: Page): Promise<void> {
-  await page.goto("/dashboard");
-  await clickAndConfirm(page, page.getByRole("button", { name: "Close my account" }));
-  await expect(page).toHaveURL(/\/\?account=deleted$/);
-  await expect(closedNotice(page)).toHaveText(CLOSED_NOTICE);
-}
 
 /** Sign up again (same kennitala) and expect the dashboard; `kept` = the page kept its old name. */
 async function signUpAgain(page: Page, user: TestUser, kept: boolean): Promise<void> {
   await page.goto("/signup");
   await fillSignup(page, user);
   await expect(page).toHaveURL(kept ? /\/dashboard\?name=kept$/ : /\/dashboard$/);
-}
-
-function firstName(name: string): string {
-  return name.split(" ")[0];
 }
 
 test.describe("dashboard", () => {
@@ -81,8 +68,7 @@ test.describe("dashboard", () => {
     // Not on their own public page, nor in the directory or search...
     for (const url of pages) {
       await page.goto(url);
-      const html = await page.content();
-      for (const variant of kennitalaVariants(user.kennitala)) expect(html, url).not.toContain(variant);
+      expectNoKennitala(await page.content(), user.kennitala, url);
     }
     // ...nor for anyone else.
     const visitor = await browser.newContext();
@@ -90,8 +76,7 @@ test.describe("dashboard", () => {
     for (const url of pages) {
       await visitorPage.goto(url);
       await expect(visitorPage.getByRole("main").getByText(user.name).first(), url).toBeVisible();
-      const html = await visitorPage.content();
-      for (const variant of kennitalaVariants(user.kennitala)) expect(html, url).not.toContain(variant);
+      expectNoKennitala(await visitorPage.content(), user.kennitala, `${url} (visitor)`);
     }
     await visitor.close();
   });
@@ -170,9 +155,9 @@ test.describe("profile", () => {
 
     // The directory and search use the new name, and the new city (also typed without accents).
     await page.goto(`/renters?q=${encodeURIComponent(newName)}`);
-    await expect(page.getByRole("main").getByRole("link", { name: new RegExp(newName) })).toHaveAttribute("href", path);
+    await expect(personCard(page, newName)).toHaveAttribute("href", path);
     await page.goto(`/renters?q=${encodeURIComponent(`${newName.split(" ")[1]} hafnarfjordur`)}`);
-    await expect(page.getByRole("main").getByRole("link", { name: new RegExp(newName) })).toHaveAttribute("href", path);
+    await expect(personCard(page, newName)).toHaveAttribute("href", path);
     await page.goto(`/renters?q=${encodeURIComponent(user.name)}`);
     await expect(page.getByText(`0 renters matching “${user.name}”`)).toBeVisible();
   });
@@ -203,7 +188,7 @@ test.describe("profile", () => {
     await page.getByLabel("Bio").fill("x".repeat(20));
     await page.getByRole("button", { name: "Save profile" }).click();
 
-    await expect(formAlert(page)).toHaveText("Please fix the highlighted fields.");
+    await expect(formAlert(page)).toHaveText(FIX_FIELDS);
     await expect(page.getByText("Name must be at least 2 characters.")).toBeVisible();
     await expect(page.getByLabel("Name", { exact: true })).toHaveValue(" X ");
     await expect(page.getByLabel("City")).toHaveValue("Typed City");
@@ -224,7 +209,7 @@ test.describe("profile", () => {
     const bio = `Ask me anything, kt. ${formatKennitala(freshKennitala())}`;
     await page.getByLabel("Bio").fill(bio);
     await page.getByRole("button", { name: "Save profile" }).click();
-    await expect(formAlert(page)).toHaveText("Please fix the highlighted fields.");
+    await expect(formAlert(page)).toHaveText(FIX_FIELDS);
     await expect(page.getByLabel("Bio")).toHaveAccessibleDescription(
       /Don't include a kennitala here\. ID numbers are never shown on GossipRent\.$/,
     );
@@ -258,7 +243,7 @@ test.describe("profile", () => {
     const user = makeUser("renter");
     await signUp(page, user);
     const path = await myProfilePath(page);
-    const id = path.split("/").pop();
+    const id = idOf(path);
     const landlord = await createActor(browser, "landlord");
     await postReview(landlord.page, path, makeReview(5), user.kennitala);
 
@@ -275,7 +260,7 @@ test.describe("profile", () => {
     await name.fill(`Renamed ${nameToken()}`);
     await page.getByLabel("City").fill("Selfoss");
     await page.getByRole("button", { name: "Save profile" }).click();
-    await expect(formAlert(page)).toHaveText("Please fix the highlighted fields.");
+    await expect(formAlert(page)).toHaveText(FIX_FIELDS);
     await expect(name).toHaveAttribute("aria-invalid", "true");
     // The same sentence as the hint, now also as the field's error.
     await expect(name).toHaveAccessibleDescription(`${NAME_LOCKED} ${NAME_LOCKED}`);
@@ -368,7 +353,7 @@ test.describe("closing an account", () => {
     expect(response?.status()).toBe(200);
     await expect(page.getByRole("heading", { level: 1, name: user.name })).toBeVisible();
     await expect(noAccountBadge(page)).toBeVisible();
-    await expect(page.getByText(NO_ACCOUNT_NOTE)).toBeVisible();
+    await expect(page.getByText(NO_ACCOUNT_NOTE, { exact: true })).toBeVisible();
     await expect(page.getByRole("main").getByRole("link", { name: "Sign up with your kennitala" })).toHaveAttribute(
       "href",
       "/signup",
@@ -381,7 +366,7 @@ test.describe("closing an account", () => {
     await expect(reviewCard(page, aboutRenter.title)).toBeVisible();
     // ...and it's still listed, marked "No account", in the directory (without the city).
     await page.goto(`/renters?q=${encodeURIComponent(user.name)}`);
-    const card = page.getByRole("main").getByRole("link", { name: new RegExp(user.name) });
+    const card = personCard(page, user.name);
     await expect(card).toHaveAttribute("href", renterPath);
     await expect(card).toContainText("5 · 1 review");
     expect(await cardMeta(card)).toEqual(["Renter", "No account"]);
@@ -409,7 +394,7 @@ test.describe("closing an account", () => {
     const again = { ...user, name: `Back ${nameToken()}` };
     await signUpAgain(page, again, true);
     await expect(page.getByRole("heading", { level: 1, name: `Hi, ${firstName(user.name)}` })).toBeVisible();
-    await expect(page.getByRole("main").getByRole("status")).toContainText("People had already reviewed you");
+    await expect(keptNameNotice(page)).toHaveText(KEPT_NAME);
     await expect(page.getByRole("heading", { name: "Reviews about you (1)" })).toBeVisible();
     await expect(reviewCard(page, aboutRenter.title)).toBeVisible();
     await expect(page.getByRole("heading", { name: "Reviews you've written (0)" })).toBeVisible();
@@ -476,30 +461,33 @@ test.describe("closing an account", () => {
     const landlordPath = await myProfilePath(page);
     const property = makeProperty();
     const propertyPath = await addProperty(page, property);
-    await expect(page.getByText(`Landlord: ${landlord.name}`)).toBeVisible();
-    await expect(page.getByText(UNCONFIRMED)).toHaveCount(0);
+    await expect(landlordLine(page, landlord.name)).toBeVisible();
+    await expect(unconfirmedNote(page)).toHaveCount(0);
 
     await closeAccount(page);
 
-    // The property keeps its landlord, now a profile without an account.
+    // The property keeps its landlord, now a profile without an account. They
+    // listed it themselves, so it doesn't say a renter named them.
     await page.goto(propertyPath);
-    await expect(page.getByText(`Landlord: ${landlord.name}`)).toBeVisible();
-    await expect(page.getByRole("link", { name: landlord.name })).toHaveAttribute("href", landlordPath);
-    await expect(page.getByText(UNCONFIRMED)).toBeVisible();
+    await expect(landlordLine(page, landlord.name)).toBeVisible();
+    await expect(landlordLink(page, landlord.name)).toHaveAttribute("href", landlordPath);
+    await expect(unconfirmedNote(page)).toHaveCount(0);
     await page.goto(landlordPath);
     await expect(page.getByRole("heading", { level: 1, name: landlord.name })).toBeVisible();
     await expect(noAccountBadge(page)).toBeVisible();
+    // The note doesn't claim a review created the page or that someone else typed the name.
+    await expect(page.getByText(NO_ACCOUNT_NOTE, { exact: true })).toBeVisible();
+    await expect(page.getByText(/first review was written/)).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "Properties (1)" })).toBeVisible();
     await expect(page.getByText(/^First reviewed/)).toHaveCount(0);
     await expect(page.getByText(/Member since/)).toHaveCount(0);
     await page.goto(`/landlords?q=${encodeURIComponent(landlord.name)}`);
-    const card = page.getByRole("main").getByRole("link", { name: new RegExp(landlord.name) });
+    const card = personCard(page, landlord.name);
     expect(await cardMeta(card)).toEqual(["Landlord", "No account"]);
     expect(await cardSubtitle(card)).toBe("1 property");
     await page.goto(`/properties?q=${encodeURIComponent(property.address)}`);
-    await expect(
-      page.getByRole("main").getByRole("link", { name: new RegExp(escapeRegExp(propertyLabel(property))) }),
-    ).toContainText(`Landlord: ${landlord.name} (not confirmed)`);
+    await expect(propertyCard(page, property)).toContainText(`Landlord: ${landlord.name}`);
+    await expect(propertyCard(page, property)).not.toContainText("(not confirmed)");
 
     // Nobody else described them by name, so signing up again uses the new one.
     const again = { ...landlord, name: `Newname ${nameToken()}` };
@@ -509,8 +497,8 @@ test.describe("closing an account", () => {
     await expect(page.getByLabel("Name", { exact: true })).not.toHaveAccessibleDescription(NAME_LOCKED);
     expect(await myProfilePath(page)).toBe(landlordPath);
     await page.goto(propertyPath);
-    await expect(page.getByText(`Landlord: ${again.name}`)).toBeVisible();
-    await expect(page.getByText(UNCONFIRMED)).toHaveCount(0);
+    await expect(landlordLine(page, again.name)).toBeVisible();
+    await expect(unconfirmedNote(page)).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Not my property" })).toBeVisible();
   });
 
@@ -537,12 +525,13 @@ test.describe("closing an account", () => {
     // A renter adding the place they rent can still link them by kennitala.
     const property = makeProperty();
     const propertyPath = await addProperty(renter.page, property, { kennitala: landlord.user.kennitala });
-    await expect(renter.page.getByText(`Landlord: ${landlord.user.name}`)).toBeVisible();
-    await expect(renter.page.getByText(UNCONFIRMED)).toBeVisible();
+    // A renter named them and they have no account: not confirmed.
+    await expect(landlordLine(renter.page, landlord.user.name)).toBeVisible();
+    await expect(unconfirmedNote(renter.page)).toBeVisible();
     await page.goto(landlord.profilePath);
     await expect(page.getByRole("heading", { name: "Properties (1)" })).toBeVisible();
     await page.goto(propertyPath);
-    await expect(page.getByRole("link", { name: landlord.user.name })).toHaveAttribute("href", landlord.profilePath);
+    await expect(landlordLink(page, landlord.user.name)).toHaveAttribute("href", landlord.profilePath);
     await landlord.context.close();
     await renter.context.close();
   });
@@ -569,15 +558,16 @@ test.describe("closing a landlord account that has properties", () => {
     await expect(noAccountBadge(page)).toBeVisible();
     await expect(reviewCard(page, about.title)).toBeVisible();
     await expect(page.getByRole("heading", { name: "Properties (2)" })).toBeVisible();
-    for (const path of [propertyPath, linkedPath]) {
-      await page.goto(path);
-      await expect(page.getByText(`Landlord: ${landlord.user.name}`), path).toBeVisible();
-      await expect(page.getByText(UNCONFIRMED), path).toBeVisible();
-    }
+    // The one they listed themselves isn't "not confirmed"; the one a renter named them for is.
+    await page.goto(propertyPath);
+    await expect(landlordLine(page, landlord.user.name)).toBeVisible();
+    await expect(unconfirmedNote(page)).toHaveCount(0);
+    await page.goto(linkedPath);
+    await expect(landlordLine(page, landlord.user.name)).toBeVisible();
+    await expect(unconfirmedNote(page)).toBeVisible();
     await page.goto(`/properties?q=${encodeURIComponent(property.address)}`);
-    await expect(
-      page.getByRole("main").getByRole("link", { name: new RegExp(escapeRegExp(propertyLabel(property))) }),
-    ).toContainText(`Landlord: ${landlord.user.name} (not confirmed)`);
+    await expect(propertyCard(page, property)).toContainText(`Landlord: ${landlord.user.name}`);
+    await expect(propertyCard(page, property)).not.toContainText("(not confirmed)");
     // The renter who added the second place may now change its landlord.
     await renter.page.goto(linkedPath);
     await expect(renter.page.locator("summary", { hasText: "Change the landlord" })).toBeVisible();
@@ -592,8 +582,8 @@ test.describe("closing a landlord account that has properties", () => {
     expect(await myProfilePath(page)).toBe(landlord.profilePath);
     for (const path of [propertyPath, linkedPath]) {
       await page.goto(path);
-      await expect(page.getByText(`Landlord: ${landlord.user.name}`), path).toBeVisible();
-      await expect(page.getByText(UNCONFIRMED), path).toHaveCount(0);
+      await expect(landlordLine(page, landlord.user.name), path).toBeVisible();
+      await expect(unconfirmedNote(page), path).toHaveCount(0);
       await expect(page.getByRole("button", { name: "Not my property" }), path).toBeVisible();
     }
     // The landlord has an account again, so the renter can't change the link any more.
@@ -633,12 +623,7 @@ test.describe("in Icelandic", () => {
       "Eyðir innskráningunni þinni og umsögnunum sem þú skrifaðir. Umsagnir sem aðrir skrifuðu um þig verða áfram á vefnum.",
     );
     await expect(section).toContainText("Ef þú stofnar aðgang aftur með sömu kennitölu færðu síðuna þína til baka.");
-    let message = "";
-    page.once("dialog", (dialog) => {
-      message = dialog.message();
-      void dialog.accept();
-    });
-    await section.getByRole("button", { name: "Eyða aðgangi" }).click();
+    const message = await confirmMessage(page, section.getByRole("button", { name: "Eyða aðgangi" }));
     await expect(page).toHaveURL(/\/\?account=deleted$/);
     expect(message).toBe(
       "Eyða aðganginum? Innskráningunni þinni og umsögnunum sem þú skrifaðir verður eytt varanlega. Umsagnir sem aðrir skrifuðu um þig verða áfram á vefnum.",

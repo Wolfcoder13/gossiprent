@@ -62,10 +62,15 @@ export function PersonCard({ person, role }: { person: PersonListItem; role: Use
   );
 }
 
-/** A property: its address ("Njálsgata 23, íbúð 0201" over "101 Reykjavík"), rating and landlord. */
+/**
+ * A property: its address ("Njálsgata 23, íbúð 0201" over "101 Reykjavík"),
+ * rating and landlord, marked "not confirmed" when a renter named a landlord
+ * who has no account (as on the property's page).
+ */
 export function PropertyCard({ property }: { property: PropertyListItem }) {
   const t = useT();
   const { landlord } = property;
+  const unconfirmed = landlord && !landlord.confirmed && !landlord.hasAccount;
   return (
     <Link href={subjectPath("property", property.id)} className={cardClass}>
       <div className="flex items-start gap-3">
@@ -90,7 +95,7 @@ export function PropertyCard({ property }: { property: PropertyListItem }) {
       )}
       <p className="mt-auto pt-4 text-xs wrap-anywhere text-muted">
         {landlord
-          ? t(landlord.hasAccount ? "browse.card.landlord" : "browse.card.landlordUnconfirmed", { name: landlord.name })
+          ? t(unconfirmed ? "browse.card.landlordUnconfirmed" : "browse.card.landlord", { name: landlord.name })
           : t("browse.card.noLandlord")}
       </p>
     </Link>

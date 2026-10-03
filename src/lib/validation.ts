@@ -11,26 +11,27 @@ import type { Leaves, Translator } from "@/i18n/types";
 import { LIMITS, type FormState } from "./form-state";
 import { containsKennitala, parseKennitalaInput } from "./kennitala";
 import { isHomePostcode } from "./postcodes";
-import { normalizeText } from "./text";
+import { normalizeMultilineText, normalizeText, normalizeUnit } from "./text";
 
 type ValidationKey = `validation.${Leaves<Messages["validation"]>}`;
 
 const noKennitala = (value: string) => !containsKennitala(value);
 
 /**
- * Multi-line free text (reviews, bios, descriptions): NFC, trimmed, at most
- * `max` characters, and never containing a kennitala.
+ * Multi-line free text (reviews, bios, descriptions): NFC, trimmed, line
+ * breaks as "\n" (so a browser's CRLF counts as one character, like the
+ * textarea's maxLength does), no other control characters, at most `max`
+ * characters, and never containing a kennitala.
  */
 export function freeText(max: number, tooLong: ValidationKey = "validation.tooLong") {
   return z
     .string()
-    .normalize("NFC")
-    .trim()
+    .overwrite(normalizeMultilineText)
     .max(max, tooLong)
     .refine(noKennitala, "validation.noKennitalaInText");
 }
 
-/** One line of text: like freeText, with runs of whitespace collapsed to one space. */
+/** One line of text: like freeText, with runs of whitespace (line breaks too) collapsed to one space. */
 function textLine(max: number, tooLong: ValidationKey) {
   return z
     .string()
@@ -39,10 +40,10 @@ function textLine(max: number, tooLong: ValidationKey) {
     .refine(noKennitala, "validation.noKennitalaInText");
 }
 
-/** Blank (empty or only spaces) or missing means "not given": null. */
+/** Blank (empty, or only spaces and control characters) or missing means "not given": null. */
 export function optional<T extends z.ZodType>(schema: T) {
   return z.preprocess(
-    (value) => (value === undefined || (typeof value === "string" && value.trim() === "") ? null : value),
+    (value) => (value === undefined || (typeof value === "string" && normalizeText(value) === "") ? null : value),
     schema.nullable(),
   );
 }
@@ -235,9 +236,6 @@ export const reviewWizardSchema = savesByDefault(
   ]),
 );
 
-// "íbúð 0201", "íb. 3", "apt 2", "unit 5" and "#4" are stored as "0201", "3", "2", "5" and "4".
-const UNIT_PREFIX = /^(?:#|(?:íbúð|íb\.|apt\.?|unit)(?!\p{L}))\s*/iu;
-
 /**
  * Add a property. intent "check" only reports who landlordKennitala belongs
  * to; intent "save" adds the property. landlordName and confirmNewLandlord
@@ -252,8 +250,9 @@ export const propertySchema = savesByDefault(
         LIMITS.address.min,
         "validation.address.required",
       ),
+      // Stored without "íbúð", "apt." or "#" (normalizeUnit): "íbúð-0201" → "0201", "apt.B" → "B".
       unit: optional(
-        textLine(LIMITS.unit.max, "validation.unit.tooLong").overwrite((unit) => unit.replace(UNIT_PREFIX, "")),
+        textLine(LIMITS.unit.max, "validation.unit.tooLong").overwrite((unit) => normalizeUnit(unit) ?? ""),
       ).transform((unit) => unit || null),
       postalCode: postalCodeField,
       description: optional(freeText(LIMITS.description.max, "validation.description.tooLong")),
@@ -283,7 +282,8 @@ export const REPORT_REASONS = [
 /**
  * /report. `id` is required except for target "account" (always null there).
  * The details may contain a kennitala: someone reporting that their identity
- * was claimed has to say whose. Reports are only read by the operator.
+ * was claimed has to say whose. Reports are only read by the operator (in a
+ * terminal, so no control characters are stored: normalizeMultilineText).
  */
 export const reportSchema = z
   .object({
@@ -292,8 +292,7 @@ export const reportSchema = z
     reason: z.enum(REPORT_REASONS, { error: "validation.report.reason" }),
     details: z
       .string()
-      .normalize("NFC")
-      .trim()
+      .overwrite(normalizeMultilineText)
       .min(1, "validation.report.detailsRequired")
       .max(LIMITS.reportDetails.max, "validation.tooLong"),
     contactEmail: optional(emailField),

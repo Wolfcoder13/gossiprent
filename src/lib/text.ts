@@ -5,9 +5,25 @@
  * and the demo-data seed can use them too.
  */
 
-/** NFC, trimmed, with runs of whitespace collapsed to one space. */
+// Line breaks, however they were sent: browsers send a textarea's as CRLF.
+const LINE_BREAK = /\r\n?|[\u0085\u2028\u2029]/g;
+// C0 and C1 control characters (ESC, backspace…) and DEL, except tab and "\n"
+// (run after LINE_BREAK, so no "\r" is left): never meaningful in what people
+// type here, and an escape sequence could take over the operator's terminal
+// when a report is printed. So they're never stored.
+const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g;
+
+/** NFC, trimmed, with runs of whitespace (line breaks too) collapsed to one space and no control characters. */
 export function normalizeText(value: string): string {
-  return value.normalize("NFC").replace(/\s+/g, " ").trim();
+  return value.normalize("NFC").replace(LINE_BREAK, " ").replace(CONTROL, "").replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Multi-line text (reviews, bios, descriptions, report details): NFC, trimmed,
+ * every line break as "\n", tabs kept, and no other control characters.
+ */
+export function normalizeMultilineText(value: string): string {
+  return value.normalize("NFC").replace(LINE_BREAK, "\n").replace(CONTROL, "").trim();
 }
 
 /**
@@ -95,10 +111,27 @@ export function icelandicSortKey(value: string): string {
   return key;
 }
 
-// "íbúð 0201", "íb. 0201", "apt 3", "unit 2B", "#4" → just the apartment.
-const UNIT_PREFIX = /^(?:íbúð|íb\.|apt\.?|unit|#)(?=\s|\d|$)\s*/iu;
+/**
+ * Words an apartment may start with ("íbúð 0201", "íb. 3", "apt. 2B",
+ * "unit 5"), lower-case. normalizeUnit drops them (and "#"), with or without
+ * the period, and the site puts "íbúð"/"apt." back in front of a short
+ * apartment number (streetLine).
+ */
+export const UNIT_PREFIX_WORDS = ["íbúð", "íb.", "apt.", "unit"] as const;
 
-/** An apartment as typed, without a leading "íbúð"/"apt"/"#"; null when blank. */
+// One of the words as a whole word ("Unitas" and "íbúðin 2" keep theirs), or
+// "#", then any separators: "íbúð-0201", "íb.3", "apt.B", "unit: 5", "# 4".
+const UNIT_PREFIX = new RegExp(
+  String.raw`^(?:#|(?:${UNIT_PREFIX_WORDS.map((word) => word.replace(/\.$/, "")).join("|")})(?!\p{L}))[\s:.,\-\u2010-\u2015]*`,
+  "iu",
+);
+
+/**
+ * An apartment as typed, without a leading "íbúð"/"íb."/"apt."/"unit"/"#" and
+ * whatever separates it from the rest; null when blank. The one rule for the
+ * stored unit and its search key (the property form and propertyAddressKeys
+ * both use it), so "íbúð-0201", "íbúð 0201" and "0201" are the same apartment.
+ */
 export function normalizeUnit(unit: string | null | undefined): string | null {
   return normalizeText(unit ?? "").replace(UNIT_PREFIX, "").trim() || null;
 }

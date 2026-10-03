@@ -32,12 +32,12 @@ export const RATE_LIMITS = {
   passwordChangePerUser: { max: 10, windowMs: 15 * MINUTE },
   // Looking a kennitala up (wizard, property form, lookup, profile-page review)
   // reveals whether someone with that number has been reviewed, so it's limited
-  // per account in a short and a long window, and per network.
+  // per account in a short and a long window, and per network. There is no
+  // per-profile limit: one shared by everyone would let a single account block
+  // all new reviews of a profile by filling it with wrong numbers.
   kennitalaChecksPerUser: { max: 10, windowMs: 15 * MINUTE },
   kennitalaChecksPerUserDaily: { max: 50, windowMs: DAY },
   kennitalaChecksPerIp: { max: 100, windowMs: DAY },
-  // Wrong kennitalas typed on one profile's page, from anyone: guessing its number.
-  kennitalaMismatchPerSubject: { max: 20, windowMs: DAY },
   newReviewsPerAuthor: { max: 20, windowMs: DAY },
   // Profiles without an account, created by reviewing or linking a new kennitala.
   newProfilesPerAuthor: { max: 5, windowMs: DAY },
@@ -52,11 +52,6 @@ export function kennitalaCheckLimits(userId: string, ip: string | null): RateLim
     { key: `kt:userday:${userId}`, ...RATE_LIMITS.kennitalaChecksPerUserDaily },
     ...(ip ? [{ key: `kt:ip:${ip}`, ...RATE_LIMITS.kennitalaChecksPerIp }] : []),
   ];
-}
-
-/** Limit for a kennitala that didn't match profile `subjectId` (consumed on a mismatch only). */
-export function kennitalaMismatchLimits(subjectId: string): RateLimit[] {
-  return [{ key: `kt:subject:${subjectId}`, ...RATE_LIMITS.kennitalaMismatchPerSubject }];
 }
 
 /** Limit for writing a new review (not for editing one). */

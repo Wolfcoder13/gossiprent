@@ -101,6 +101,8 @@ export async function seedDemoData(db: Database): Promise<boolean> {
           postalCode: property.postalCode,
           description: property.description,
           landlordId: userId(property.landlord),
+          // Listed by the landlord themselves; otherwise a renter named them.
+          landlordConfirmed: property.landlord === property.createdBy,
           createdById: userId(property.createdBy),
           createdAt: daysAgo(property.addedDaysAgo),
         })),

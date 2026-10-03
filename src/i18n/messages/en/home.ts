@@ -43,8 +43,7 @@ export default {
   latest: {
     heading: "Latest reviews",
     emptyTitle: "No reviews yet",
-    emptyBody:
-      "Once people start reviewing landlords, renters, and properties, the newest reviews will show up here.",
+    emptyBody: "Once people start reviewing landlords and properties, the newest reviews will show up here.",
     emptyAction: "Be the first — sign up",
   },
   cta: {

@@ -2,7 +2,9 @@ import { expect, test, type Browser, type BrowserContext, type Locator, type Pag
 import {
   DEMO,
   findPersonPath,
+  FIX_FIELDS,
   formAlert,
+  horizontalOverflow,
   LANGUAGE_NAME,
   languageButton,
   makeUser,
@@ -11,6 +13,7 @@ import {
   signUp,
   summaryAverage,
   switchLanguage,
+  watchErrors,
   type Locale,
 } from "./helpers";
 
@@ -50,6 +53,11 @@ function hintText(page: Page): Locator {
 
 function hintButton(page: Page): Locator {
   return page.getByRole("button", { name: "Switch to English", exact: true });
+}
+
+/** The hint's other button, in Icelandic, for visitors who want to stay in Icelandic. */
+function stayButton(page: Page): Locator {
+  return page.getByRole("button", { name: "Halda áfram á íslensku", exact: true });
 }
 
 function mainNav(page: Page, locale: Locale): Locator {
@@ -172,10 +180,12 @@ test.describe("Icelandic by default", () => {
       await expect(main.getByRole("heading", { level: 3, name: title })).toBeVisible();
     }
     // The latest reviews say what they're about in Icelandic ("Umsögn um leigusala: Sigrún …").
+    // Only landlords and properties: renters' pages aren't indexed, so reviews of them stay off this page.
     const latest = main.getByRole("region", { name: "Nýjustu umsagnir" });
     await expect(latest.locator("article").first()).toBeVisible();
+    await expect(latest.getByText(/^Umsögn um leigjanda: /)).toHaveCount(0);
     for (const card of await latest.locator("article").all()) {
-      await expect(card.getByText(/^Umsögn um (leigusala|leigjanda|eign): /)).toBeVisible();
+      await expect(card.getByText(/^Umsögn um (leigusala|eign): /)).toBeVisible();
       await expect(card.getByRole("img", { name: /^Einkunn [1-5] af 5$/ })).toBeVisible();
       await expect(card.getByRole("link", { name: "Tilkynna", exact: true })).toBeVisible();
     }
@@ -265,6 +275,9 @@ test.describe("the English hint", () => {
     await expect(hintText(page)).toBeVisible();
     await expect(page.locator('[lang="en"]').filter({ has: hintText(page) })).toHaveCount(1);
     await expect(hintButton(page)).toBeVisible();
+    // ...with a way to stay in Icelandic, in Icelandic.
+    await expect(stayButton(page)).toBeVisible();
+    await expect(stayButton(page)).toHaveAttribute("lang", "is");
     const hintBox = await hintText(page).boundingBox();
     const headerBox = await page.getByRole("banner").boundingBox();
     expect(hintBox!.y).toBeLessThan(headerBox!.y);
@@ -289,6 +302,27 @@ test.describe("the English hint", () => {
     await expect(hintText(page)).toHaveCount(0);
   });
 
+  test("“Halda áfram á íslensku” keeps the Icelandic page and puts the hint away for good", async ({ page, context }) => {
+    await page.goto(JON_QUERY);
+    await expect(hintText(page)).toBeVisible();
+    const historyLength = await page.evaluate(() => history.length);
+
+    await stayButton(page).click();
+    await expect(hintText(page)).toHaveCount(0);
+    await expect(htmlLang(page)).toHaveAttribute("lang", "is");
+    await expectOnJonQuery(page);
+    await expectJonDirectory(page, "is");
+    // The same page, replaced in the history rather than added to it.
+    expect(await page.evaluate(() => history.length)).toBe(historyLength);
+    // Icelandic is now a choice, remembered like any other.
+    expect(await langCookie(context)).toMatchObject({ value: "is", httpOnly: true, sameSite: "Lax", path: "/" });
+    await page.goto("/privacy");
+    await expect(page.getByRole("heading", { level: 1, name: "Persónuvernd" })).toBeVisible();
+    await expect(hintText(page)).toHaveCount(0);
+    // The header still offers English.
+    await expect(languageButton(page, "en")).toBeVisible();
+  });
+
   test("only visitors who haven't picked a language and don't prefer Icelandic see it", async ({
     browser,
     request,
@@ -305,6 +339,7 @@ test.describe("the English hint", () => {
       await expect(htmlLang(page), locale).toHaveAttribute("lang", "is");
       await expect(hintText(page), locale).toHaveCount(hint ? 1 : 0);
       await expect(hintButton(page), locale).toHaveCount(hint ? 1 : 0);
+      await expect(stayButton(page), locale).toHaveCount(hint ? 1 : 0);
       await context.close();
     }
 
@@ -383,7 +418,7 @@ test.describe("the language switch", () => {
     await expect(page.getByRole("button", { name: "Create account" })).toBeVisible();
     // ...and the server answers in English.
     await page.getByRole("button", { name: "Create account" }).click();
-    await expect(formAlert(page)).toHaveText("Please fix the highlighted fields.");
+    await expect(formAlert(page)).toHaveText(FIX_FIELDS);
     await expect(page.getByText("Enter a kennitala.", { exact: true })).toBeVisible();
 
     await switchLanguage(page, "is", "footer");
@@ -442,7 +477,16 @@ test.describe("the language switch", () => {
     await expect(htmlLang(page)).toHaveAttribute("lang", "en");
     await expectOnJonQuery(page);
 
-    // The hint's button, on a page with a path and a query of its own.
+    // The hint's "stay in Icelandic" button.
+    await context.clearCookies({ name: "lang" });
+    await page.goto(JON_QUERY);
+    await stayButton(page).click();
+    await expect(hintText(page)).toHaveCount(0);
+    await expect(htmlLang(page)).toHaveAttribute("lang", "is");
+    await expectOnJonQuery(page);
+    expect(await langCookie(context)).toMatchObject({ value: "is", httpOnly: true });
+
+    // The hint's English button, on a page with a path and a query of its own.
     await context.clearCookies({ name: "lang" });
     await page.goto("/search?q=Akureyri");
     await expect(page.getByRole("heading", { level: 1, name: "Niðurstöður fyrir „Akureyri“" })).toBeVisible();
@@ -592,11 +636,7 @@ test.describe("Icelandic formatting", () => {
     // Not every browser has Icelandic number data (this Chromium doesn't); the
     // client must still write "4,5" where the server did, or React reports a
     // hydration mismatch and replaces the server's HTML.
-    const errors: string[] = [];
-    page.on("pageerror", (error) => errors.push(`page error: ${error.message}`));
-    page.on("console", (message) => {
-      if (message.type() === "error") errors.push(`console error: ${message.text()}`);
-    });
+    const errors = watchErrors(page);
     const sigrun = DEMO.people.sigrun;
     const sigrunPath = await findPersonPath(page, "landlord", sigrun.name);
     const olafurPath = await findPersonPath(page, "renter", DEMO.people.olafur.name);
@@ -831,8 +871,12 @@ test.describe("on a phone, in Icelandic", () => {
       await page.goto(path);
       await expect(hintButton(page)).toBeVisible();
       expect(await headerProblems(page), path).toEqual([]);
-      const button = await hintButton(page).boundingBox();
-      expect(button!.x + button!.width, path).toBeLessThanOrEqual(320);
+      expect(await horizontalOverflow(page), path).toBeLessThanOrEqual(0);
+      for (const button of [hintButton(page), stayButton(page)]) {
+        await expect(button, path).toBeInViewport({ ratio: 1 });
+        const box = await button.boundingBox();
+        expect(box!.x + box!.width, path).toBeLessThanOrEqual(320);
+      }
     }
     await hintButton(page).click();
     await expect(htmlLang(page)).toHaveAttribute("lang", "en");

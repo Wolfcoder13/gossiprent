@@ -31,7 +31,8 @@ No one uses the site yet: the schema is rewritten as one fresh drizzle/0000 migr
   `redirect(safeRedirectPath(next, "/"), RedirectType.replace)`. Works without JavaScript. Shown in the
   header's right-hand cluster at every width and again in the footer.
 - When there's no `lang` cookie and the browser's Accept-Language doesn't put Icelandic first, show one
-  English line above the header: "This site is in Icelandic." + a "Switch to English" button (same form).
+  English line above the header: "This site is in Icelandic." + a "Switch to English" button (same form),
+  and a "Halda áfram á íslensku" button that sets lang=is so the line goes away.
 - i18n modules (lead writes these in W0; everyone uses them):
   - `src/i18n/config.ts`: `LOCALES`, `Locale`, `DEFAULT_LOCALE`, `LOCALE_COOKIE = "lang"`, `isLocale`,
     `INTL_TAG = { is: "is-IS", en: "en-GB" }`, `TIME_ZONE = "Atlantic/Reykjavik"`, `LANGUAGE_NAME`.
@@ -89,7 +90,11 @@ No one uses the site yet: the schema is rewritten as one fresh drizzle/0000 migr
 - `allowTestKennitalas()`: true when `ALLOW_TEST_KENNITALA === "true"`, or when `NODE_ENV !== "production"`
   and `ALLOW_TEST_KENNITALA !== "false"`. (Robot "Gervimaður" numbers 010130-xxx9 are used by demo data.)
 - `isAdultKennitala(p: ParsedKennitala, now = new Date())`: persons with a birth date must be ≥ 18.
-- `formatKennitala(value)` → "DDMMYY-NNNN". `KENNITALA_SHAPED = /^\s*\d{6}\s*-?\s*\d{4}\s*$/`.
+- `formatKennitala(value)` → "DDMMYY-NNNN".
+- `src/lib/kennitala-pattern.ts` (dependency-free, client-safe) holds the one kennitala-like pattern
+  (`KENNITALA_LIKE_SOURCE`: six digits, any spaces/hyphens/dashes, four digits), `hasKennitalaShape(text)`
+  (anywhere) and `isKennitalaShaped(text)` (the whole string), applied after NFKC and dropping invisible
+  characters. Free-text checks, search boxes, the search backstop and the admin script's masking all use it.
 - `containsKennitala(text)`: true if text contains `\d{6}[-\s]?\d{4}` that parses. Free-text fields
   (review title/body, bio, property description, names) are rejected with
   `validation.noKennitalaInText`.
@@ -144,7 +149,11 @@ reports (new): `id uuid pk`, `target_kind enum report_target ('review','profile'
   - `grantRoleByKennitala(tx, kt, role) → { id, name, … } | null` (UPDATE … RETURNING; null = unknown).
   - `grantRoleById(tx, id, kt, role) → boolean` (UPDATE … WHERE id AND kennitala RETURNING — the profile-page
     match check, nothing written on mismatch).
-  - `getOwnKennitala(userId) → string | null` (dashboard only).
+  - `getOwnKennitala(userId) → string | null` (accounts only: the dashboard, and the own-kennitala check when
+    linking a landlord).
+  - `hasReviewedProperty(executor, kt, propertyId)`, `isDisclaimedLandlord(executor, kt, propertyId)` (relink).
+  - `detachAccount(tx, userId) → "deleted" | "kept"`: removes a login but keeps reviews about the person;
+    shared by closing an account and the operator's reset-account.
   - `isNameLocked(tx|db, userId) → boolean`: true if any review is about them, or they're the landlord of a
     property someone else created.
   - `reconcileProfiles(tx, ids)`: for rows *without an account* among ids, `FOR UPDATE SKIP LOCKED`, then in
@@ -152,21 +161,27 @@ reports (new): `id uuid pk`, `target_kind enum report_target ('review','profile'
     reviews, and delete the row if neither (inside a savepoint; a still-referenced error → keep the row).
     *Implemented:* a RESTRICT violation is 23001 on Postgres 18/PGlite and 23503 on Postgres ≤ 17, so code
     uses `isStillReferenced(e)`. Rows that wrote reviews are never deleted (that would cascade their reviews).
+    *Implemented:* returns the ids it skipped (locked by another transaction); callers pass them to
+    `reconcileSkipped(ids)` after their commit, which reconciles them with a waiting lock.
+- Lock order: a transaction that locks both a property and a person locks the property first.
 - Signup (`signup` action, fields: kennitala, name, email, password, isRenter, isLandlord, city, next):
   - kennitala via parseKennitalaInput (`validation.kennitala.invalid`); company → field error
     "Company accounts aren't available yet."; person under 18 → "You must be 18 or older to sign up.";
-  - hash the password first, then ONE statement: insert … on conflict (kennitala) do update set
-    email, password_hash, joined_at=now(), city, bio=null, roles = existing OR chosen,
-    name = existing name if the row is name-locked else the typed name (sort/search keys likewise)
-    `where users.email is null` → returning id. No row returned → field error on kennitala:
+  - hash the password first, then one transaction: insert … on conflict (kennitala) do nothing; else lock
+    the existing row FOR UPDATE (it must have no account), check isNameLocked in a new statement, then
+    set email, password_hash, joined_at=now(), city, bio=null, roles = existing OR chosen, and the typed
+    name unless locked; delete any sessions left on the row (at most 3 tries if the row vanishes). An
+    existing account → field error on kennitala:
     "This kennitala already has an account." plus a link "Not you? Report it" to /report?target=account.
     23505 on users_email_unique → email field error as today. Other errors → sanitizeDbError.
   - If the claimed profile kept its name, the dashboard shows a notice explaining the name comes from reviews.
-- Login: unchanged (by email; only accounts match).
+- Login: by email; only accounts match. The session is stored only if the password hash just checked is still
+  current, and readSessionUser ignores sessions older than the account's joined_at, so a login racing a
+  reset or close can't leave a session behind for whoever takes the profile over next.
 - updateProfile: refuses a name change while `isNameLocked` ("Your name can't be changed after people have
   reviewed you. If it's wrong, report it."); only accounts can update.
 - changeRole: unchanged rules (can't drop a role you've been reviewed in; dropping landlord unlinks your
-  properties).
+  properties, records a property_disclaimers row for each, and clears landlord_confirmed).
 - deleteAccount (close): `SELECT … FOR UPDATE` on self (must be an account); delete reviews they wrote
   (returning subjects); delete sessions; then, in new statements: reviewedAsLandlord, reviewedAsRenter,
   linkedAsLandlord. None → delete the row. Otherwise clear email/password_hash/joined_at/city/bio, set
@@ -205,15 +220,16 @@ Transaction order (one transaction, refusals after a write call `tx.rollback()`)
 5. Insert in a savepoint (23505 → update, as today). Revalidate the subject's pages.
 - Property reviews: unchanged rules (renters only; not the property's landlord), no kennitala.
 - Rate limits (§9): every kennitala check consumes `kt:user` (+ `kt:ip`); a profile-page match releases
-  it; a mismatch also consumes `kt:subject:<subjectId>`. New reviews consume `review-new:user`; new
-  profiles consume `profile-new:user`.
+  it. There is deliberately no per-profile cap: it let one account block every new review of a profile.
+  New reviews consume `review-new:user`; new profiles consume `profile-new:user`.
 - Review prompts (no payment/debt questions — possible Act 90/2018 art. 15 issue):
   landlord: "Did they answer quickly and fix things? Was the lease fair, and did you get the deposit back?"
   renter: "How did they look after the home? How was communication, including with neighbours?"
   property: "What's it like to live there? Heating, damp or mould, noise, laundry, parking, the area…"
   Above every review form, short guidelines: no debts or money owed, health, criminal accusations,
   family details, or anyone's kennitala, phone number or address.
-- deleteReview: author only; then reconcileProfiles([subject]) for person reviews.
+- deleteReview: author only; then reconcileProfiles([subject]) for person reviews, reconcileSkipped after
+  commit; if the profile is gone, the author is sent to /dashboard.
 
 ## 6. Properties (src/app/actions/properties.ts)
 
@@ -224,19 +240,25 @@ Transaction order (one transaction, refusals after a write call `tx.rollback()`)
   (optional)"), `landlordName` ("Landlord's name", only needed when the kennitala is new),
   `confirmNewLandlord` ("on"), and a secondary submit `intent=check` ("Check") that reports who the
   kennitala belongs to without saving (same rate limit as other kennitala checks).
-- Normalize: NFC, collapse whitespace; strip a leading "íbúð", "íb.", "apt", "apt.", "unit", "#" from unit.
+- Normalize: NFC, collapse whitespace; strip a leading "íbúð", "íb.", "apt", "apt.", "unit" (whole word) or
+  "#" from unit, with any separator after it (one rule, `normalizeUnit` in text.ts, used everywhere).
 - Landlord link: "own" → yourself (must be a landlord). "rent" + kennitala → found: grant landlord role
   (also to a renter-only *account*); not found: needs name + confirm → ensurePerson. Your own kennitala
   is refused. Minors refused (neutral message).
 - `updatePropertyLandlord(prev, formData)` intents: `claim` (as today), `unlink` (as today, "Not my
   property"), `relink` (creator only, while the linked landlord has no account: new kennitala/name/confirm
   or empty to clear; then reconcileProfiles on the old landlord).
-- Pages show "Added by a renter, not confirmed" next to a landlord who has no account; the property and its
-  reviews always stay on the site.
+- `properties.landlord_confirmed`: true when the landlord listed the property as their own or claimed it,
+  false when a renter named them (link or relink) or after an unlink. Pages show "Added by a renter, not
+  confirmed" only when it's false and the landlord has no account. The property and its reviews always stay.
+- "Not my property" sticks: unlink (and dropping the landlord role) writes a `property_disclaimers` row;
+  relink and its check refuse a disclaimed person, and anyone who has reviewed the property; a claim by the
+  landlord confirms the link and deletes their disclaimer.
   *Implemented:* `updatePropertyLandlord` also accepts `intent=check` so the creator's relink form can look a
   kennitala up first (counted like every other kennitala check).
-- Display: `PropertyAddress` component: line 1 "Njálsgata 23, íbúð 0201" (unit of 3–4 digits gets the
-  localized "íbúð"/"apt." prefix; other units as typed), line 2 "101 Reykjavík".
+- Display: `PropertyAddress` component: line 1 "Njálsgata 23, íbúð 0201" (a unit of 1–4 digits with an
+  optional letter, or a lone letter, gets the localized "íbúð"/"apt." prefix; other units as typed),
+  line 2 "101 Reykjavík".
 
 ## 7. Text, names, search, sorting (src/lib/text.ts, src/lib/postcodes.ts — lead writes in W0)
 
@@ -257,9 +279,11 @@ Transaction order (one transaction, refusals after a write call `tx.rollback()`)
 
 - Directories list profiles with and without accounts; badge "No account" / "Án aðgangs". Profiles
   without an account: no "Member since" (show "First reviewed {month year}"), and the note: "This person
-  doesn't have a GossipRent account. The page was created when the first review was written, and the name
-  is the one its author entered. Is this you? Sign up with your kennitala to take over the page. Reviews
-  others wrote about you stay on it." Accounts show "Identity not verified" in small print.
+  doesn't have a GossipRent account and doesn't manage this page. The name may have been entered by
+  someone else. Is this you? Sign up with your kennitala to take over the page. Reviews others wrote about
+  you stay on it." (true however the page came to exist). Accounts show "Identity not verified".
+- The home page is indexed, so its latest reviews show only property reviews and landlord reviews whose
+  subject has an account or is a company (never renter reviews or people without an account).
 - Profile pages: `/renters/[id]` always `robots: noindex, nofollow`; `/landlords/[id]` too when it's a
   person without an account. `src/app/robots.ts` disallows /renters, /search, /reviews, /dashboard, /report.
 - Kennitala lookup (`lookupKennitala(prev, formData)`, field `kennitala`, button "Look up", heading
@@ -268,7 +292,8 @@ Transaction order (one transaction, refusals after a write call `tx.rollback()`)
   link "Write the first review" (/reviews/new). Shown under the search box on home and /search.
 - GET search with a kennitala-shaped `q` (home, /search, directories): never search or echo it;
   redirect to `/search?kt=1` (*Implemented:* 307 — a Server Component's redirect() is always 307 for GET), which shows "To look up a kennitala, use the form below." above the
-  lookup form. The search box (client) also intercepts a kennitala-shaped submit and focuses the lookup form.
+  lookup form, with the lookup field autofocused. The search box (client) also intercepts a kennitala-shaped
+  submit and focuses the lookup form.
 - `/privacy` page (footer link "Privacy" / "Persónuvernd"): why kennitalas are used (reliably telling
   namesakes apart), that they're never shown, that identities aren't verified, that people can't remove
   reviews about them but can report problems, closed accounts, contact.
@@ -278,8 +303,7 @@ Transaction order (one transaction, refusals after a write call `tx.rollback()`)
 
 `kennitalaChecksPerUser: 10 / 15 min` and `kennitalaChecksPerUserDaily: 50 / 24 h` (key `kt:user:<id>`,
 two windows on two keys `kt:user15:` and `kt:userday:`), `kennitalaChecksPerIp: 100 / 24 h` (`kt:ip:<ip>`,
-only when the IP is known), `kennitalaMismatchPerSubject: 20 / 24 h` (`kt:subject:<uuid>`),
-`newReviewsPerAuthor: 20 / 24 h` (`review-new:user:<id>`), `newProfilesPerAuthor: 5 / 24 h`
+only when the IP is known), `newReviewsPerAuthor: 20 / 24 h` (`review-new:user:<id>`), `newProfilesPerAuthor: 5 / 24 h`
 (`profile-new:user:<id>`), `reportsPerUser: 10 / 24 h`, `reportsPerIp: 20 / 24 h`.
 Over a limit: "Too many attempts. Please try again later." (existing wording). AUTH_RATE_LIMIT=off disables all.
 
@@ -289,10 +313,13 @@ Over a limit: "Too many attempts. Please try again later." (existing wording). A
   `reason` (select), `details` (required, ≤ 2000), `contactEmail` (optional; required when logged out).
   Success: "Thanks. We'll look into it." Links: "Report" on every review card, "Report this page" on
   profiles and properties, "Not you? Report it" on the signup already-has-an-account error.
-- `scripts/admin.ts` (`npm run admin -- <command>`): `reports` (list unresolved), `resolve <reportId>
+- `scripts/admin.ts` (`npm run admin -- <command>`; commands in scripts/admin-commands.ts): `reports` (list unresolved), `resolve <reportId>
   <note>`, `remove-review <reviewId>`, `reset-account <userId>` (clear email/password/joined_at/city/bio,
   delete sessions; never touches reviews about them), `rename-profile <userId> <name>`,
-  `relink-property <propertyId> <kennitala|none>`. Uses `connect()` like scripts/seed.ts; never prints kennitalas.
+  `relink-property <propertyId> <kennitala|none>`. Uses `connect()` like scripts/seed.ts; never prints kennitalas,
+  and escapes control characters in everything it prints (report text comes from the public).
+  *Implemented:* reset-account uses detachAccount (deletes a row nothing refers to); relink-property follows the
+  app's relink rules (refuses reviewers and disclaimed landlords; clears landlord_confirmed).
 
 ## 11. Demo data (src/db/demo-people.ts pure data + src/db/seed.ts)
 

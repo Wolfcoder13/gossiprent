@@ -57,7 +57,8 @@ export default async function HomePage({ searchParams }: PageProps<"/">) {
     getT(),
     getFormat(),
     getSiteStats(),
-    listRecentReviews(6),
+    // This page is indexed: only reviews whose subject's page is indexed too (spec §8).
+    listRecentReviews(6, { indexedOnly: true }),
     getCurrentUser(),
   ]);
 

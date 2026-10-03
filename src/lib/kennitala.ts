@@ -1,4 +1,5 @@
 import { formatKennitala as formatKt, getKennitalaBirthDate, parseKennitala } from "is-kennitala";
+import { KENNITALA_LIKE_SOURCE, kennitalaSearchText } from "./kennitala-pattern";
 
 /**
  * Kennitala (Icelandic ID number) parsing. Pure: no database access.
@@ -37,14 +38,18 @@ function yearsBefore(now: Date, years: number): Date {
   return date;
 }
 
+// Hyphens and dashes the parser doesn't know (iOS turns "--" into "—"); it
+// takes "-" and "–" only.
+const OTHER_DASHES = /[\u2010-\u2012\u2014\u2015\u2212\uFE58\uFE63\uFF0D]/g;
+
 /**
- * Parse what someone typed ("010190-2939", "0101902939", "kt. 010190 2939").
- * Returns null for anything that can't be a real kennitala, including people
- * born in the future or more than 110 years ago.
+ * Parse what someone typed ("010190-2939", "0101902939", "kt. 010190 2939",
+ * "010190 — 2939"). Returns null for anything that can't be a real kennitala,
+ * including people born in the future or more than 110 years ago.
  */
 export function parseKennitalaInput(raw: string, now = new Date()): ParsedKennitala | null {
   if (typeof raw !== "string" || raw.length > 40) return null;
-  const parsed = parseKennitala(raw, {
+  const parsed = parseKennitala(raw.normalize("NFKC").replace(OTHER_DASHES, "-"), {
     clean: "aggressive",
     strictDate: true,
     robot: allowTestKennitalas(),
@@ -70,15 +75,19 @@ export function formatKennitala(value: string): string {
   return formatKt(value);
 }
 
-/** Search-box input that looks like a kennitala (so it must not be searched or echoed). */
-export const KENNITALA_SHAPED = /^\s*\d{6}\s*-?\s*\d{4}\s*$/;
+// A kennitala-like sequence that isn't part of a longer run of digits.
+const KENNITALA_IN_TEXT = new RegExp(String.raw`(?<!\d)${KENNITALA_LIKE_SOURCE}(?!\d)`, "g");
 
-const KENNITALA_IN_TEXT = /(?<!\d)\d{6}[-\s]?\d{4}(?!\d)/g;
-
-/** True if free text contains something that parses as a kennitala (reviews, bios, names…). */
+/**
+ * True if free text contains something that parses as a kennitala (reviews,
+ * bios, names…), however it's spaced or dashed ("150385 – 3579") and even
+ * with invisible characters in it (see kennitala-pattern.ts).
+ */
 export function containsKennitala(text: string): boolean {
-  for (const match of text.matchAll(KENNITALA_IN_TEXT)) {
-    if (parseKennitalaInput(match[0])) return true;
+  for (const match of kennitalaSearchText(text).matchAll(KENNITALA_IN_TEXT)) {
+    // Just the digits: the match may span spaces and dashes the parser would
+    // reject between the two parts (a line break, several dashes…).
+    if (parseKennitalaInput(match[0].replace(/\D/g, ""))) return true;
   }
   return false;
 }

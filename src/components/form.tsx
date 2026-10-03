@@ -16,17 +16,19 @@ type FieldProps = {
   error?: string[];
   hint?: ReactNode;
   required?: boolean;
+  /** The id of text elsewhere on the page that also describes the control (read before the hint). */
+  describedBy?: string;
   children: (ids: { inputId: string; describedBy: string | undefined; invalid: boolean }) => ReactNode;
 };
 
 /** Label + control + hint + error, wired up with ids for screen readers. */
-function Field({ label, name, error, hint, required, children }: FieldProps) {
+function Field({ label, name, error, hint, required, describedBy: extraDescription, children }: FieldProps) {
   const t = useT();
   const id = useId();
   const inputId = `${name}-${id}`;
   const hintId = hint ? `${inputId}-hint` : undefined;
   const errorId = error?.length ? `${inputId}-error` : undefined;
-  const describedBy = [hintId, errorId].filter(Boolean).join(" ") || undefined;
+  const describedBy = [extraDescription, hintId, errorId].filter(Boolean).join(" ") || undefined;
   return (
     <div className="space-y-1.5">
       <label htmlFor={inputId} className="block text-sm font-medium text-ink">
@@ -64,11 +66,14 @@ type InputProps = {
   spellCheck?: boolean;
   autoCapitalize?: "off" | "none" | "on" | "sentences" | "words" | "characters";
   autoCorrect?: "on" | "off";
+  /** Focus the field when the page loads (rendered as `autofocus`, so it works without JavaScript too). */
+  autoFocus?: boolean;
+  describedBy?: string;
 };
 
-export function TextInput({ label, name, error, hint, required, ...rest }: InputProps) {
+export function TextInput({ label, name, error, hint, required, describedBy, ...rest }: InputProps) {
   return (
-    <Field label={label} name={name} error={error} hint={hint} required={required}>
+    <Field label={label} name={name} error={error} hint={hint} required={required} describedBy={describedBy}>
       {({ inputId, describedBy, invalid }) => (
         <input
           id={inputId}
@@ -91,11 +96,12 @@ export function TextArea({
   error,
   hint,
   required,
+  describedBy,
   rows,
   ...rest
 }: Omit<InputProps, "type" | "autoComplete"> & { rows: number }) {
   return (
-    <Field label={label} name={name} error={error} hint={hint} required={required}>
+    <Field label={label} name={name} error={error} hint={hint} required={required} describedBy={describedBy}>
       {({ inputId, describedBy, invalid }) => (
         <textarea
           id={inputId}
@@ -124,6 +130,8 @@ export function KennitalaField({
   error,
   hint,
   required,
+  autoFocus,
+  describedBy,
 }: {
   label: string;
   name: string;
@@ -131,6 +139,9 @@ export function KennitalaField({
   error?: string[];
   hint?: ReactNode;
   required?: boolean;
+  autoFocus?: boolean;
+  /** The id of text elsewhere on the page that also describes the field. */
+  describedBy?: string;
 }) {
   const t = useT();
   return (
@@ -141,6 +152,8 @@ export function KennitalaField({
       error={error}
       hint={hint === undefined ? t("common.kennitala.hint") : hint}
       required={required}
+      autoFocus={autoFocus}
+      describedBy={describedBy}
       inputMode="numeric"
       autoComplete="off"
       maxLength={13}

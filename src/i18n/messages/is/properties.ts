@@ -85,7 +85,10 @@ export default {
     listed: "Skráð í {date}",
     /** {name} is a link to the landlord's page (nominative, after the colon). */
     landlord: "Leigusali: {name}",
-    /** Next to a landlord without a GossipRent account: a renter named them. */
+    /**
+     * Next to a landlord a renter named who has no GossipRent account, so hasn't
+     * confirmed it (not one who listed or claimed the property and then closed their account).
+     */
     unconfirmed: "Tilgreint af leigjanda, ekki staðfest",
     noLandlord: "Enginn leigusali tengdur",
     claim: "Ég er leigusali hér",
@@ -139,5 +142,13 @@ export default {
     relinkNotCreator: "Þú getur aðeins breytt leigusala eigna sem þú skráðir.",
     relinkHasAccount:
       "Leigusalinn er með aðgang að GossipRent, svo aðeins er hægt að fjarlægja tenginguna úr þeim aðgangi (með „Ekki mín eign“). Ef hún er röng skaltu tilkynna síðuna.",
+    /** To the property's creator: the person with that kennitala wrote a review of it. */
+    relinkReviewed: "Viðkomandi hefur skrifað umsögn um þessa eign og getur því ekki verið leigusali hennar.",
+    /**
+     * To the property's creator: that person said „Ekki mín eign“ (or stopped being a landlord on
+     * GossipRent). Neutral; only they can link it again, by claiming it.
+     */
+    relinkDisclaimed:
+      "Viðkomandi hefur sagt að eignin sé ekki sín, svo ekki er hægt að tengja viðkomandi við hana. Aðeins viðkomandi getur tengt hana við sig aftur, með „Ég er leigusali hér“.",
   },
 } as const satisfies Tree;

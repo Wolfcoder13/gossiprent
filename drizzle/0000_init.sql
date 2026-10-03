@@ -16,9 +16,17 @@ CREATE TABLE "properties" (
 	"address_sort" text NOT NULL,
 	"address_search" text NOT NULL,
 	"landlord_id" uuid,
+	"landlord_confirmed" boolean DEFAULT false NOT NULL,
 	"created_by_id" uuid,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "properties_postal_code_range" CHECK ("properties"."postal_code" between 100 and 999)
+);
+--> statement-breakpoint
+CREATE TABLE "property_disclaimers" (
+	"property_id" uuid NOT NULL,
+	"user_id" uuid NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "property_disclaimers_property_id_user_id_pk" PRIMARY KEY("property_id","user_id")
 );
 --> statement-breakpoint
 CREATE TABLE "reports" (
@@ -81,6 +89,8 @@ CREATE TABLE "users" (
 --> statement-breakpoint
 ALTER TABLE "properties" ADD CONSTRAINT "properties_landlord_id_users_id_fk" FOREIGN KEY ("landlord_id") REFERENCES "public"."users"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "properties" ADD CONSTRAINT "properties_created_by_id_users_id_fk" FOREIGN KEY ("created_by_id") REFERENCES "public"."users"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "property_disclaimers" ADD CONSTRAINT "property_disclaimers_property_id_properties_id_fk" FOREIGN KEY ("property_id") REFERENCES "public"."properties"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "property_disclaimers" ADD CONSTRAINT "property_disclaimers_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "reports" ADD CONSTRAINT "reports_reporter_id_users_id_fk" FOREIGN KEY ("reporter_id") REFERENCES "public"."users"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "reviews" ADD CONSTRAINT "reviews_author_id_users_id_fk" FOREIGN KEY ("author_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "reviews" ADD CONSTRAINT "reviews_subject_user_id_users_id_fk" FOREIGN KEY ("subject_user_id") REFERENCES "public"."users"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint

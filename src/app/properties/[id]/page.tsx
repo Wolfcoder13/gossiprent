@@ -87,7 +87,8 @@ export default async function PropertyPage({ params, searchParams }: PageProps<"
                         ),
                       })}
                     </p>
-                    {!landlord.hasAccount && (
+                    {/* A renter named them, and they have no account to say otherwise. */}
+                    {!landlord.confirmed && !landlord.hasAccount && (
                       <p className="text-xs text-muted">{t("properties.page.unconfirmed")}</p>
                     )}
                   </div>

@@ -16,11 +16,13 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 const RESULTS_PER_GROUP = 6;
+const POINTER_ID = "kennitala-lookup-pointer";
 
 /**
  * Search everything, with the kennitala lookup under the search box. A query
  * containing a kennitala is never searched or echoed: it lands on
- * /search?kt=1, which points to the lookup form instead.
+ * /search?kt=1, which says to use the lookup form and puts the cursor in it
+ * (with and without JavaScript). The number typed isn't carried over.
  */
 export default async function SearchPage({ searchParams }: PageProps<"/search">) {
   const search = await searchParams;
@@ -32,11 +34,15 @@ export default async function SearchPage({ searchParams }: PageProps<"/search">)
   const lookup = (
     <div className="mt-6 max-w-xl space-y-3">
       {fromKennitala && (
-        <p className="rounded-xl border border-line bg-surface-muted px-4 py-3 text-sm text-ink">
+        <p id={POINTER_ID} className="rounded-xl border border-line bg-surface-muted px-4 py-3 text-sm text-ink">
           {t("lookup.useFormBelow")}
         </p>
       )}
-      <KennitalaLookup loggedIn={user !== null} />
+      <KennitalaLookup
+        loggedIn={user !== null}
+        autoFocus={fromKennitala}
+        describedBy={fromKennitala ? POINTER_ID : undefined}
+      />
     </div>
   );
 

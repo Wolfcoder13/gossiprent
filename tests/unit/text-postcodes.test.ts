@@ -3,10 +3,12 @@ import { HOME_POSTCODES, isHomePostcode, placeName, postcodesMatching } from "@/
 import {
   foldForSearch,
   icelandicSortKey,
+  normalizeMultilineText,
   normalizeText,
   normalizeUnit,
   personNameKeys,
   propertyAddressKeys,
+  UNIT_PREFIX_WORDS,
 } from "@/lib/text";
 
 describe("normalizeText", () => {
@@ -14,6 +16,29 @@ describe("normalizeText", () => {
     expect(normalizeText("  Jón \t  Jónsson\n")).toBe("Jón Jónsson");
     expect(normalizeText("Jón")).toHaveLength(3);
     expect(normalizeText("   ")).toBe("");
+  });
+
+  it("turns every kind of line break into a space and drops other control characters", () => {
+    expect(normalizeText("Jón\r\nJónsson")).toBe("Jón Jónsson");
+    expect(normalizeText("Jón\u0085Jónsson ")).toBe("Jón Jónsson");
+    expect(normalizeText("Jón \u001b[2J\u001b[8mJónsson")).toBe("Jón [2J[8mJónsson");
+    expect(normalizeText("Jón\u0008\u007f\u009b Jónsson")).toBe("Jón Jónsson");
+    expect(normalizeText("\u001b\u0000 ")).toBe("");
+  });
+});
+
+describe("normalizeMultilineText", () => {
+  it("keeps line breaks (as \\n) and tabs, trims the ends, composes accents", () => {
+    expect(normalizeMultilineText("  Fyrsta lína\r\n\r\nÖnnur\tlína\n ")).toBe("Fyrsta lína\n\nÖnnur\tlína");
+    expect(normalizeMultilineText("a\rb c d\u0085e")).toBe("a\nb\nc\nd\ne");
+    expect(normalizeMultilineText("Jón")).toBe("Jón");
+  });
+
+  it("drops every other control character, so terminal escape sequences are never stored", () => {
+    expect(normalizeMultilineText("Halló\u001b[2J\u001b[3J\u001b[H heimur")).toBe("Halló[2J[3J[H heimur");
+    expect(normalizeMultilineText("x\u001b]52;c;ZWNobw==\u0007y")).toBe("x]52;c;ZWNobw==y");
+    expect(normalizeMultilineText("a\u0000\u0008\u000b\u000c\u007f\u0080\u009fb")).toBe("ab");
+    expect(normalizeMultilineText("\u001b \r\n")).toBe("");
   });
 });
 
@@ -102,20 +127,49 @@ describe("normalizeUnit", () => {
     ["ÍBÚÐ 0201", "0201"],
     ["íb. 0201", "0201"],
     ["íb.0201", "0201"],
+    ["íb 3", "3"],
+    ["íbúð0201", "0201"],
+    ["íbúð-0201", "0201"],
+    ["íbúð:0201", "0201"],
+    ["íbúð – 0201", "0201"],
+    ["íbúð. 3", "3"],
     ["apt 3", "3"],
     ["Apt. 3B", "3B"],
+    ["apt.B", "B"],
+    ["APT-2", "2"],
     ["unit 2B", "2B"],
+    ["unit: 5", "5"],
+    ["Unit 5", "5"],
     ["#4", "4"],
     ["# 4", "4"],
+    ["#B", "B"],
+    ["#-4", "4"],
     ["  0201  ", "0201"],
+    ["íbúð 2. hæð til vinstri", "2. hæð til vinstri"],
     ["2. hæð t.v.", "2. hæð t.v."],
+    // Words that only start like one of the prefixes keep it.
     ["Unitas 1", "Unitas 1"],
+    ["Unitas", "Unitas"],
+    ["íbúðin 2", "íbúðin 2"],
+    ["Aptos 3", "Aptos 3"],
+    ["íbx 3", "íbx 3"],
+    ["kjallari", "kjallari"],
   ])("%j → %j", (input, expected) => {
     expect(normalizeUnit(input)).toBe(expected);
   });
 
-  it.each([[""], ["   "], ["íbúð"], ["#"], [null], [undefined]])("%j → null", (input) => {
+  it.each([[""], ["   "], ["íbúð"], ["íbúð."], ["apt.:"], ["#"], [null], [undefined]])("%j → null", (input) => {
     expect(normalizeUnit(input)).toBeNull();
+  });
+
+  it.each(UNIT_PREFIX_WORDS)("drops %j, with or without its period", (word) => {
+    expect(normalizeUnit(`${word} 3`)).toBe("3");
+    expect(normalizeUnit(`${word.replace(/\.$/, "")} 3`)).toBe("3");
+    expect(normalizeUnit(`${word.toLocaleUpperCase("is")}3`)).toBe("3");
+  });
+
+  it("lists the words in lower case", () => {
+    for (const word of UNIT_PREFIX_WORDS) expect(word).toBe(word.toLocaleLowerCase("is"));
   });
 });
 
@@ -151,6 +205,8 @@ describe("propertyAddressKeys", () => {
       ["NJÁLSGATA 23", "Íb. 0201"],
       ["njalsgata 23", "apt 0201"],
       ["Njálsgata  23", "#0201"],
+      ["Njálsgata 23", "íbúð-0201"],
+      ["Njálsgata 23", "íbúð: 0201"],
     ]) {
       expect(propertyAddressKeys(address, unit).addressSearch, `${address} / ${unit}`).toBe(key);
     }

@@ -7,10 +7,12 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-/** The fake request: its cookie jar (with the options each cookie was set with) and headers. */
+/** The fake request: its cookie jar (with the options each cookie was set with), headers and URL. */
 const request = vi.hoisted(() => ({
   cookies: new Map<string, { value: string; options?: Record<string, unknown> }>(),
   headers: new Headers(),
+  pathname: "/",
+  search: "",
 }));
 
 vi.mock("next/headers", () => ({
@@ -40,9 +42,12 @@ vi.mock("next/navigation", () => ({
   redirect: (url: string, type?: string) => {
     throw new RedirectSignal(url, type);
   },
+  usePathname: () => request.pathname,
+  useSearchParams: () => new URLSearchParams(request.search),
 }));
 
 import { setLocale } from "@/app/actions/locale";
+import { EnglishHint } from "@/components/language-switch";
 import { prefersIcelandic } from "@/i18n/accept-language";
 import { addressText, placeLine, streetLine } from "@/i18n/address";
 import { LOCALE_COOKIE } from "@/i18n/config";
@@ -55,6 +60,8 @@ import type { Plural, Tree } from "@/i18n/types";
 beforeEach(() => {
   request.cookies = new Map();
   request.headers = new Headers();
+  request.pathname = "/";
+  request.search = "";
 });
 
 // A small dictionary of its own, so these tests don't depend on the site's wording.
@@ -160,14 +167,34 @@ describe("addresses", () => {
   const is = createT(MESSAGES.is, "is");
   const en = createT(MESSAGES.en, "en");
 
-  it("prefixes a 3–4 digit unit with “íbúð” / “apt.” and shows other units as typed", () => {
+  it("prefixes an apartment number with “íbúð” / “apt.” and shows other units as typed", () => {
     expect(streetLine(is, { address: "Njálsgata 23", unit: "0201" })).toBe("Njálsgata 23, íbúð 0201");
     expect(streetLine(en, { address: "Njálsgata 23", unit: "0201" })).toBe("Njálsgata 23, apt. 0201");
     expect(streetLine(is, { address: "Hamraborg 14", unit: "503" })).toBe("Hamraborg 14, íbúð 503");
     expect(streetLine(en, { address: "Laugavegur 5", unit: "2. hæð til vinstri" })).toBe(
       "Laugavegur 5, 2. hæð til vinstri",
     );
+    expect(streetLine(is, { address: "Laugavegur 5", unit: "kjallari" })).toBe("Laugavegur 5, kjallari");
+    expect(streetLine(en, { address: "Laugavegur 5", unit: "12345" })).toBe("Laugavegur 5, 12345");
     expect(streetLine(is, { address: "Hringbraut 79", unit: null })).toBe("Hringbraut 79");
+  });
+
+  // The property form stores "íbúð 3", "apt. 2B" and "#B" as "3", "2B" and "B"
+  // (normalizeUnit): the prefix comes back, so they never read like a house number.
+  it.each([
+    ["3", "Hringbraut 79, íbúð 3", "Hringbraut 79, apt. 3"],
+    ["12", "Hringbraut 79, íbúð 12", "Hringbraut 79, apt. 12"],
+    ["2B", "Hringbraut 79, íbúð 2B", "Hringbraut 79, apt. 2B"],
+    ["0201a", "Hringbraut 79, íbúð 0201a", "Hringbraut 79, apt. 0201a"],
+    ["B", "Hringbraut 79, íbúð B", "Hringbraut 79, apt. B"],
+  ])("prefixes the short apartment number %j too", (unit, icelandic, english) => {
+    expect(streetLine(is, { address: "Hringbraut 79", unit })).toBe(icelandic);
+    expect(streetLine(en, { address: "Hringbraut 79", unit })).toBe(english);
+  });
+
+  it.each([["2B3"], ["AB"], ["2. hæð"], ["3 t.v."]])("shows %j as typed", (unit) => {
+    expect(streetLine(is, { address: "Hringbraut 79", unit })).toBe(`Hringbraut 79, ${unit}`);
+    expect(streetLine(en, { address: "Hringbraut 79", unit })).toBe(`Hringbraut 79, ${unit}`);
   });
 
   it("shows the postcode with its place", () => {
@@ -176,6 +203,34 @@ describe("addresses", () => {
     expect(addressText(is, { address: "Njálsgata 23", unit: "0201", postalCode: 101 })).toBe(
       "Njálsgata 23, íbúð 0201, 101 Reykjavík",
     );
+  });
+});
+
+describe("no-account notes on a profile", () => {
+  const is = createT(MESSAGES.is, "is");
+  const en = createT(MESSAGES.en, "en");
+
+  // A page without an account comes from a review, from a renter naming the
+  // landlord of a property, or from a closed account: the note is true for all.
+  it("don't say how the page came to be, only that nobody with an account manages it", () => {
+    expect(en("profile.noAccountNote.company")).toBe(
+      "This company doesn't have a GossipRent account and doesn't manage this page. The name may have been entered by someone else.",
+    );
+    expect(is("profile.noAccountNote.company")).toBe(
+      "Þetta fyrirtæki er ekki með aðgang að GossipRent og hefur ekki umsjón með þessari síðu. Aðrir gætu hafa slegið nafnið inn.",
+    );
+    const signUp = createElement("a", { href: "/signup" }, "SIGN UP");
+    expect(renderToStaticMarkup(en.rich("profile.noAccountNote.person", { signUp }))).toBe(
+      "This person doesn&#x27;t have a GossipRent account and doesn&#x27;t manage this page. The name may have been entered by someone else. Is this you? <a href=\"/signup\">SIGN UP</a> to take over the page. Reviews others wrote about you stay on it.",
+    );
+    expect(renderToStaticMarkup(is.rich("profile.noAccountNote.person", { signUp }))).toBe(
+      "Viðkomandi er ekki með aðgang að GossipRent og hefur ekki umsjón með þessari síðu. Aðrir gætu hafa slegið nafnið inn. Ert þetta þú? <a href=\"/signup\">SIGN UP</a> til að taka yfir síðuna. Umsagnir sem aðrir skrifuðu um þig verða áfram á henni.",
+    );
+    for (const messages of [MESSAGES.en, MESSAGES.is]) {
+      for (const note of Object.values(messages.profile.noAccountNote)) {
+        expect(note).not.toMatch(/review was written|umsögnin var skrifuð|its author|höfundur/);
+      }
+    }
   });
 });
 
@@ -274,6 +329,49 @@ describe("offering English", () => {
     expect(await shouldOfferEnglish()).toBe(false);
     request.cookies.set(LOCALE_COOKIE, { value: "nonsense" });
     expect(await shouldOfferEnglish()).toBe(true);
+  });
+});
+
+describe("EnglishHint", () => {
+  /** The hint's buttons: [locale value, lang attribute, text]. */
+  function buttons(): string[][] {
+    const html = renderToStaticMarkup(createElement(EnglishHint));
+    return [...html.matchAll(/<button([^>]*)>([^<]*)<\/button>/g)].map(([, attributes, label]) => [
+      /value="([^"]*)"/.exec(attributes)?.[1] ?? "",
+      /lang="([^"]*)"/.exec(attributes)?.[1] ?? "",
+      label,
+    ]);
+  }
+
+  it("offers English, and staying in Icelandic (in Icelandic), so the line can be dismissed either way", () => {
+    expect(buttons()).toEqual([
+      ["en", "en", "Switch to English"],
+      ["is", "is", "Halda áfram á íslensku"],
+    ]);
+  });
+
+  it("comes back to the same page and query with either button", () => {
+    request.pathname = "/landlords";
+    request.search = "q=K%C3%B3pavogur&page=2";
+    const html = renderToStaticMarkup(createElement(EnglishHint));
+    const next = [...html.matchAll(/name="next" value="([^"]*)"/g)].map((match) => match[1]);
+    expect(next).toEqual(["/landlords?q=K%C3%B3pavogur&amp;page=2", "/landlords?q=K%C3%B3pavogur&amp;page=2"]);
+  });
+
+  it("goes away for good once Icelandic is chosen, on the same page", async () => {
+    request.headers = new Headers({ "accept-language": "en-GB,en;q=0.9" });
+    expect(await shouldOfferEnglish()).toBe(true);
+    const data = new FormData();
+    data.set("locale", "is");
+    data.set("next", "/renters?q=J%C3%B3n");
+    const redirect = await setLocale(data).then(
+      () => undefined,
+      (thrown: unknown) => thrown,
+    );
+    expect(redirect).toMatchObject({ url: "/renters?q=J%C3%B3n", type: "replace" });
+    expect(request.cookies.get(LOCALE_COOKIE)?.value).toBe("is");
+    expect(await shouldOfferEnglish()).toBe(false);
+    expect(await getLocale()).toBe("is");
   });
 });
 

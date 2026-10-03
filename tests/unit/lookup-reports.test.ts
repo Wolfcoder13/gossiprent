@@ -804,7 +804,13 @@ describe("directory cards", () => {
     postalCode: 101,
     place: "Reykjavík",
     description: null,
-    landlord: { id: "11111111-1111-4111-8111-111111111111", name: "Gunnar Már Pétursson", hasAccount: false },
+    // Named by a renter, no account.
+    landlord: {
+      id: "11111111-1111-4111-8111-111111111111",
+      name: "Gunnar Már Pétursson",
+      hasAccount: false,
+      confirmed: false,
+    },
     createdById: null,
     createdAt: new Date("2026-03-01T12:00:00Z"),
     average: 4.3,
@@ -864,11 +870,26 @@ describe("directory cards", () => {
     expect(is).toContain("4,3 · 21 umsögn");
     expect(is).toContain("Leigusali: Gunnar Már Pétursson (ekki staðfest)");
 
-    const confirmed = property({ landlord: { id: "x", name: "Sigrún Helgadóttir", hasAccount: true }, unit: null });
-    expect(text(render("en", createElement(PropertyCard, { property: confirmed })))).toContain("Landlord: Sigrún Helgadóttir");
+    const account = property({
+      landlord: { id: "x", name: "Sigrún Helgadóttir", hasAccount: true, confirmed: false },
+      unit: null,
+    });
+    expect(text(render("en", createElement(PropertyCard, { property: account })))).toContain("Landlord: Sigrún Helgadóttir");
     expect(text(render("en", createElement(PropertyCard, { property: property({ landlord: null }) })))).toContain(
       "Landlord not on GossipRent yet",
     );
+  });
+
+  it("doesn't call a landlord who listed or claimed the property unconfirmed after they close their account", () => {
+    const closed = property({
+      landlord: { id: "x", name: "Sigrún Helgadóttir", hasAccount: false, confirmed: true },
+    });
+    const en = text(render("en", createElement(PropertyCard, { property: closed })));
+    expect(en).toContain("Landlord: Sigrún Helgadóttir");
+    expect(en).not.toContain("not confirmed");
+    const is = text(render("is", createElement(PropertyCard, { property: closed })));
+    expect(is).toContain("Leigusali: Sigrún Helgadóttir");
+    expect(is).not.toContain("ekki staðfest");
   });
 });
 

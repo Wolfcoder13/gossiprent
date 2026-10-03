@@ -79,7 +79,7 @@ export default {
     },
     confirmRemove: {
       landlord:
-        "Fjarlægja hlutverk leigusala? Eignirnar þínar verða ekki lengur tengdar þér. Þú getur bætt hlutverkinu við aftur hvenær sem er.",
+        "Fjarlægja hlutverk leigusala? Eignirnar þínar verða ekki lengur tengdar þér og enginn annar getur tengt þig við þær aftur. Þú getur bætt hlutverkinu við aftur hvenær sem er og tengt eign aftur við þig með „Ég er leigusali hér“ á síðu eignarinnar.",
       renter: "Fjarlægja hlutverk leigjanda? Þú getur bætt því við aftur hvenær sem er.",
     },
     kept: {

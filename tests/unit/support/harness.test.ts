@@ -8,14 +8,14 @@ vi.mock("next/headers", async () => (await import("./next-mocks")).nextHeadersMo
 vi.mock("next/navigation", async () => (await import("./next-mocks")).nextNavigationMock);
 vi.mock("next/cache", async () => (await import("./next-mocks")).nextCacheMock);
 
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { cookies, headers } from "next/headers";
 import { redirect, RedirectType } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { sessions, users } from "@/db/schema";
+import { properties, sessions, users } from "@/db/schema";
 import { getCurrentUser } from "@/lib/auth/current-user";
 import { clientIp } from "@/lib/auth/rate-limit";
-import { readSessionUser, SESSION_COOKIE } from "@/lib/auth/session";
+import { createSession, readSessionUser, SESSION_COOKIE } from "@/lib/auth/session";
 import { isAdultKennitala, parseKennitalaInput } from "@/lib/kennitala";
 import { getLocale } from "@/i18n/server";
 import {
@@ -146,6 +146,18 @@ describe("rows", () => {
     expect(property).toMatchObject({ address, unit: "0101", postalCode: 101 });
     const reviewId = await insertReview({ kind: "property", authorId: renter.id, propertyId: property.id, rating: 5 });
     expect(reviewId).toMatch(/^[0-9a-f-]{36}$/);
+
+    // A renter named the landlord, so unconfirmed, unless the test says otherwise.
+    const db = await getDb();
+    const own = await insertProperty({ landlordId: landlord.id, createdById: landlord.id, landlordConfirmed: true });
+    const confirmed = await db
+      .select({ id: properties.id, landlordConfirmed: properties.landlordConfirmed })
+      .from(properties)
+      .where(inArray(properties.id, [property.id, own.id]));
+    expect(Object.fromEntries(confirmed.map((row) => [row.id, row.landlordConfirmed]))).toEqual({
+      [property.id]: false,
+      [own.id]: true,
+    });
   });
 });
 
@@ -162,7 +174,6 @@ describe("sessions", () => {
       email: user.email,
       isLandlord: true,
       isRenter: false,
-      isCompany: false,
       city: "Selfoss",
       bio: null,
     });
@@ -190,5 +201,39 @@ describe("sessions", () => {
       .where(eq(users.id, closing.id));
     expect(await readSessionUser()).toBeNull();
     expect(await db.select().from(sessions).where(eq(sessions.userId, closing.id))).toHaveLength(1);
+  });
+
+  it("a session older than the account is ignored (one left on a profile before signup took it over)", async () => {
+    const db = await getDb();
+    const user = await createUser({ roles: "renter" });
+    await logInAs(user);
+    expect(await readSessionUser()).not.toBeNull();
+    // The account (re)starts after the session was created, as when signup takes over a profile.
+    await db.update(users).set({ joinedAt: new Date(Date.now() + 60_000) }).where(eq(users.id, user.id));
+    expect(await readSessionUser()).toBeNull();
+  });
+
+  it("with expectedHash, starts a session only while that is still the account's password", async () => {
+    const db = await getDb();
+    const user = await createUser({ roles: "renter" });
+    const [{ passwordHash }] = await db
+      .select({ passwordHash: users.passwordHash })
+      .from(users)
+      .where(eq(users.id, user.id));
+
+    newVisitor();
+    expect(await createSession(user.id, { expectedHash: passwordHash! })).toBe(true);
+    expect(await readSessionUser()).toMatchObject({ id: user.id });
+
+    // The password changed (or the account was closed or reset) after it was checked.
+    const visitor = newVisitor();
+    expect(await createSession(user.id, { expectedHash: "scrypt$stale" })).toBe(false);
+    expect(visitor.cookies.get(SESSION_COOKIE)).toBeUndefined();
+    expect(await db.select().from(sessions).where(eq(sessions.userId, user.id))).toHaveLength(1);
+
+    // A profile without an account never gets one.
+    const profile = await createUser({ roles: "renter", account: false });
+    expect(await createSession(profile.id, { expectedHash: passwordHash! })).toBe(false);
+    expect(await db.select().from(sessions).where(eq(sessions.userId, profile.id))).toHaveLength(0);
   });
 });

@@ -8,9 +8,9 @@ export default {
   identityNotVerified: "Identity not verified",
   noAccountNote: {
     person:
-      "This person doesn't have a GossipRent account. The page was created when the first review was written, and the name is the one its author entered. Is this you? {signUp} to take over the page. Reviews others wrote about you stay on it.",
+      "This person doesn't have a GossipRent account and doesn't manage this page. The name may have been entered by someone else. Is this you? {signUp} to take over the page. Reviews others wrote about you stay on it.",
     company:
-      "This company doesn't have a GossipRent account. The page was created when the first review was written, and the name is the one its author entered.",
+      "This company doesn't have a GossipRent account and doesn't manage this page. The name may have been entered by someone else.",
   },
   signUp: "Sign up with your kennitala",
   report: "Report this page",

@@ -280,6 +280,8 @@ describe("the site's queries over the demo data", () => {
       id: ids.get("sigrun"),
       name: "Sigrún Helgadóttir",
       hasAccount: true,
+      // She listed it herself.
+      confirmed: true,
     });
     // A–Ö by address: Þórunnarstræti comes last.
     expect(items.map((p) => p.address).at(-1)).toBe("Þórunnarstræti 112");

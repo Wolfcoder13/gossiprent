@@ -1,12 +1,22 @@
+import { createElement, type ComponentProps, type ReactNode } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   allowTestKennitalas,
   containsKennitala,
   formatKennitala,
   isAdultKennitala,
-  KENNITALA_SHAPED,
   parseKennitalaInput,
 } from "@/lib/kennitala";
+import { KennitalaLookup } from "@/components/kennitala-lookup";
+import { I18nProvider } from "@/i18n/client";
+import type { Locale } from "@/i18n/config";
+import { MESSAGES } from "@/i18n/messages";
+import { hasKennitalaShape, isKennitalaShaped } from "@/lib/kennitala-pattern";
+
+// The lookup form (a client component) renders without Next or a database.
+vi.mock("next/navigation", () => ({ usePathname: () => "/search", redirect: vi.fn() }));
+vi.mock("@/app/actions/lookup", () => ({ lookupKennitala: vi.fn() }));
 
 // A "Gervimaður" test number, a made-up (but well-formed) person, and a test company.
 const ROBOT = "0101302989";
@@ -20,7 +30,18 @@ afterEach(() => {
 
 describe("parseKennitalaInput", () => {
   it("reads a person's kennitala, however it's typed", () => {
-    for (const raw of ["150385-3579", "1503853579", " 150385 3579 ", "kt. 150385-3579", "150385–3579"]) {
+    for (const raw of [
+      "150385-3579",
+      "1503853579",
+      " 150385 3579 ",
+      "kt. 150385-3579",
+      "150385–3579",
+      "150385 – 3579",
+      "150385—3579",
+      "150385\u20113579",
+      "150385 \u2212 3579",
+      "１５０３８５－３５７９",
+    ]) {
       expect(parseKennitalaInput(raw, NOW), raw).toEqual({
         value: PERSON,
         type: "person",
@@ -128,17 +149,67 @@ describe("formatKennitala", () => {
   });
 });
 
-describe("KENNITALA_SHAPED", () => {
-  it.each(["150385-3579", "1503853579", " 150385 3579 ", "150385 - 3579", "123456-7890"])("matches %j", (value) => {
-    expect(KENNITALA_SHAPED.test(value)).toBe(true);
+// Every way of spacing and dashing a kennitala: what the parser accepts
+// ("aggressive" cleaning drops any spaces, hyphens and en dashes) and more.
+const SPELLINGS = [
+  "150385-3579",
+  "1503853579",
+  "150385 3579",
+  "150385 - 3579",
+  "150385 -3579",
+  "150385- 3579",
+  "150385  3579",
+  "150385–3579",
+  "150385 – 3579",
+  "150385—3579",
+  "150385\u20113579", // non-breaking hyphen
+  "150385\u22123579", // minus sign
+  "150385\u00a03579", // no-break space
+  "150385--3579",
+  "150385 - - 3579",
+];
+
+describe("isKennitalaShaped (the whole text)", () => {
+  it.each([...SPELLINGS, " 150385 3579 ", "123456-7890"])("matches %j", (value) => {
+    expect(isKennitalaShaped(value)).toBe(true);
   });
 
-  it.each(["", "15038-53579", "150385-35790", "Njálsgata 23", "kt 150385-3579", "555 1234"])(
+  it.each(["", "15038-53579", "150385-35790", "150385.3579", "Njálsgata 23", "kt 150385-3579", "555 1234"])(
     "doesn't match %j",
     (value) => {
-      expect(KENNITALA_SHAPED.test(value)).toBe(false);
+      expect(isKennitalaShaped(value)).toBe(false);
     },
   );
+});
+
+describe("hasKennitalaShape (anywhere in the text)", () => {
+  it.each([...SPELLINGS, "kt. 150385-3579", "Jón 150385 – 3579 Reykjavík", "123456-7890", "12345678901"])(
+    "matches %j",
+    (value) => {
+      expect(hasKennitalaShape(value)).toBe(true);
+    },
+  );
+
+  it.each(["", "Njálsgata 23", "555 1234", "15038-53579", "150385 35 79", "2026-10-03"])("doesn't match %j", (value) => {
+    expect(hasKennitalaShape(value)).toBe(false);
+  });
+
+  it("sees through characters that don't show on screen and fullwidth digits", () => {
+    expect(hasKennitalaShape("150385\u00ad3579")).toBe(true); // soft hyphen
+    expect(hasKennitalaShape("15\u200b0385-3579")).toBe(true); // zero-width space
+    expect(hasKennitalaShape("150385-35\ufe0f79")).toBe(true); // variation selector
+    expect(hasKennitalaShape("１５０３８５－３５７９")).toBe(true);
+    expect(hasKennitalaShape("150385\u001b3579")).toBe(true); // a control character
+    // Line breaks and other whitespace separate, they don't vanish.
+    expect(hasKennitalaShape("12345\n67890")).toBe(false);
+  });
+
+  it("stays fast on long runs of spaces", () => {
+    const start = performance.now();
+    expect(hasKennitalaShape(`150385${" ".repeat(50_000)}x`)).toBe(false);
+    expect(containsKennitala(`150385${" ".repeat(50_000)}-${" ".repeat(50_000)}x`)).toBe(false);
+    expect(performance.now() - start).toBeLessThan(1000);
+  });
 });
 
 describe("containsKennitala", () => {
@@ -149,11 +220,58 @@ describe("containsKennitala", () => {
     expect(containsKennitala(`Leigusali: Dæmi ehf. (${COMPANY})`)).toBe(true);
   });
 
+  it.each(SPELLINGS)("finds %j however it's spaced or dashed", (spelling) => {
+    expect(containsKennitala(spelling)).toBe(true);
+    expect(containsKennitala(`Leigusalinn (kt. ${spelling}) skilaði tryggingunni seint.`)).toBe(true);
+  });
+
+  it("finds one hidden with characters that don't show on screen, or in fullwidth digits", () => {
+    expect(containsKennitala("kt. 150385\u00ad3579")).toBe(true);
+    expect(containsKennitala("kt. 1503\u200d85-3579")).toBe(true);
+    expect(containsKennitala("kt. 150385\u2060 3579")).toBe(true);
+    expect(containsKennitala("kt. １５０３８５－３５７９")).toBe(true);
+  });
+
+  it("finds one written across a line break", () => {
+    expect(containsKennitala("kt. 150385-\n3579")).toBe(true);
+  });
+
   it("ignores numbers that aren't a kennitala", () => {
     expect(containsKennitala("Leigan var 250.000 kr. á mánuði og síminn 555-1234.")).toBe(false);
     expect(containsKennitala("Dæmi: 123456-7890")).toBe(false);
+    expect(containsKennitala("Dæmi: 123456 – 7890")).toBe(false);
     // Part of a longer run of digits, e.g. an account number.
     expect(containsKennitala("0111-26-15038535790")).toBe(false);
+    expect(containsKennitala("2. hæð, 150385")).toBe(false);
     expect(containsKennitala("")).toBe(false);
+  });
+});
+
+describe("KennitalaLookup", () => {
+  function render(locale: Locale, node: ReactNode): string {
+    const props = { locale, messages: MESSAGES[locale] } as ComponentProps<typeof I18nProvider>;
+    return renderToStaticMarkup(createElement(I18nProvider, props, node));
+  }
+
+  /** The kennitala input's opening tag. */
+  const field = (html: string) => /<input[^>]*name="kennitala"[^>]*>/.exec(html)![0];
+
+  it("can put the cursor in the field from the server's HTML (/search?kt=1, also without JavaScript)", () => {
+    const html = field(render("en", createElement(KennitalaLookup, { loggedIn: true, autoFocus: true })));
+    expect(html).toContain('autofocus=""');
+  });
+
+  it("doesn't take the focus otherwise", () => {
+    expect(field(render("is", createElement(KennitalaLookup, { loggedIn: false })))).not.toContain("autofocus");
+  });
+
+  it("is described by the text that says why the visitor is there, then the format hint", () => {
+    const html = field(
+      render("en", createElement(KennitalaLookup, { loggedIn: true, autoFocus: true, describedBy: "pointer" })),
+    );
+    expect(html).toMatch(/aria-describedby="pointer kennitala-[^" ]+-hint"/);
+    expect(field(render("en", createElement(KennitalaLookup, { loggedIn: true })))).toMatch(
+      /aria-describedby="kennitala-[^" ]+-hint"/,
+    );
   });
 });

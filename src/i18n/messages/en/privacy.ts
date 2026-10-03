@@ -28,7 +28,7 @@ export default {
   },
   stored: {
     heading: "What we store",
-    account: "For an account we store your kennitala, name, email and roles, and your city and About me text if you give them. Your password itself is never stored, only a hash of it.",
+    account: "For an account we store your kennitala, name, email and roles, and your city and bio if you give them. Your password itself is never stored, only a hash of it.",
     cookies: "We use two cookies: one that keeps you logged in and one that remembers your language. No advertising or tracking cookies.",
     abuse: "To prevent abuse we record attempts to log in, sign up, look up a kennitala or send a report, with the IP address they came from. These records count for at most a day and are then deleted.",
     reports: "Reports are kept with the email you give, so we can reply to you.",

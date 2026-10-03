@@ -65,7 +65,7 @@ export default {
     },
     confirmRemove: {
       landlord:
-        "Remove the landlord role? Your properties will no longer be linked to you. You can add the role back any time.",
+        "Remove the landlord role? Your properties will no longer be linked to you, and nobody else can link you to them again. You can add the role back any time and link a property to yourself again with “I manage this property” on its page.",
       renter: "Remove the renter role? You can add it back any time.",
     },
     kept: {

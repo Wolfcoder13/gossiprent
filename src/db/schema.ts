@@ -6,6 +6,7 @@ import {
   index,
   pgEnum,
   pgTable,
+  primaryKey,
   smallint,
   text,
   timestamp,
@@ -114,6 +115,9 @@ export const properties = pgTable(
     landlordId: uuid("landlord_id").references(() => users.id, {
       onDelete: "restrict",
     }),
+    // True when the landlord confirmed the link themselves (listed the
+    // property as their own, or claimed it); false when a renter named them.
+    landlordConfirmed: boolean("landlord_confirmed").notNull().default(false),
     createdById: uuid("created_by_id").references(() => users.id, {
       onDelete: "set null",
     }),
@@ -131,6 +135,26 @@ export const properties = pgTable(
     uniqueIndex("properties_address_unique").on(t.addressSearch, t.postalCode),
     check("properties_postal_code_range", sql`${t.postalCode} between 100 and 999`),
   ],
+);
+
+/**
+ * A landlord who said "Not my property" (or dropped the landlord role). The
+ * property's creator can't link them again; only they can, by claiming it.
+ */
+export const propertyDisclaimers = pgTable(
+  "property_disclaimers",
+  {
+    propertyId: uuid("property_id")
+      .notNull()
+      .references(() => properties.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.propertyId, t.userId] })],
 );
 
 export const reviews = pgTable(

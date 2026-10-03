@@ -11,7 +11,6 @@ import {
   clientIp,
   consumeAttempt,
   kennitalaCheckLimits,
-  kennitalaMismatchLimits,
   newProfileLimits,
   newReviewLimits,
   type RateLimit,
@@ -24,6 +23,7 @@ import {
   grantRoleById,
   grantRoleByKennitala,
   reconcileProfiles,
+  reconcileSkipped,
   type Person,
 } from "@/lib/people";
 import { subjectPath } from "@/lib/paths";
@@ -102,14 +102,10 @@ class HeldLimits {
   }
 }
 
-function limitsForUser(userId: string, subjectId: string | null): Record<LimitName, () => Promise<RateLimit[]>> {
+function limitsForUser(userId: string): Record<LimitName, () => Promise<RateLimit[]>> {
   return {
-    // On the profile page a check also counts against the profile, so nobody can
-    // guess its number from many accounts; a match releases both.
-    check: async () => [
-      ...kennitalaCheckLimits(userId, await clientIp()),
-      ...(subjectId ? kennitalaMismatchLimits(subjectId) : []),
-    ],
+    // Per author and network only (spec §9). On the profile page a match releases it.
+    check: async () => kennitalaCheckLimits(userId, await clientIp()),
     newReview: async () => newReviewLimits(userId),
     newProfile: async () => newProfileLimits(userId),
   };
@@ -416,7 +412,7 @@ export async function saveReview(_prev: FormState, formData: FormData): Promise<
   const kennitala =
     kind !== "property" && parsed.data.subjectKennitala ? parseKennitalaInput(parsed.data.subjectKennitala) : null;
 
-  const limits = new HeldLimits(limitsForUser(user.id, kind === "property" ? null : subjectId));
+  const limits = new HeldLimits(limitsForUser(user.id));
   // Count what a new review needs up front (the core asks for anything missed).
   if (!(await hasReviewed(user.id, kind, subjectId))) {
     if (!(await limits.consume("newReview"))) return tooManyAttempts(t, formData);
@@ -512,7 +508,7 @@ export async function reviewWizard(_prev: WizardState, formData: FormData): Prom
   if (!isAdultKennitala(kennitala)) return backToStart(refusalState(t, "minor", kind, formData));
 
   // Every lookup counts, found or not.
-  const limits = new HeldLimits(limitsForUser(user.id, null));
+  const limits = new HeldLimits(limitsForUser(user.id));
   if (!(await limits.consume("check"))) return backToStart(tooManyAttempts(t, formData));
   const person = await findPersonByKennitala(kennitala.value);
   const format = await getFormat();
@@ -598,13 +594,22 @@ export async function deleteReview(formData: FormData): Promise<void> {
       .where(and(eq(reviews.id, reviewId), eq(reviews.authorId, user.id)))
       .returning({ kind: reviews.kind, subjectUserId: reviews.subjectUserId, propertyId: reviews.propertyId });
     if (!row) return null;
-    if (!row.subjectUserId) return { ...row, profileGone: false };
-    await reconcileProfiles(tx, [row.subjectUserId]);
-    const [still] = await tx.select({ id: users.id }).from(users).where(eq(users.id, row.subjectUserId));
-    return { ...row, profileGone: !still };
+    // A profile another transaction has locked (someone reviewing it, or deleting
+    // its other review right now) is skipped here and tidied up below.
+    const skipped = row.subjectUserId ? await reconcileProfiles(tx, [row.subjectUserId]) : [];
+    return { ...row, skipped };
   });
   if (!deleted) return;
+  // After the commit: waits for that other transaction, then sees what it left.
+  await reconcileSkipped(deleted.skipped);
 
   revalidateReviewPages(deleted.kind, (deleted.propertyId ?? deleted.subjectUserId)!);
-  if (deleted.profileGone) redirect("/dashboard");
+  if (deleted.subjectUserId && !(await profileExists(deleted.subjectUserId))) redirect("/dashboard");
+}
+
+/** Whether the person's row (account or not) still exists, after everything above committed. */
+async function profileExists(id: string): Promise<boolean> {
+  const db = await getDb();
+  const [row] = await db.select({ id: users.id }).from(users).where(eq(users.id, id)).limit(1);
+  return Boolean(row);
 }

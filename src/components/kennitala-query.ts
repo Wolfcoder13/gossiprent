@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { hasKennitalaShape } from "@/lib/kennitala-pattern";
 
 /*
  * Search boxes are GET forms, so whatever is typed into them ends up in the
@@ -16,15 +17,15 @@ export const KENNITALA_LOOKUP_PATH = "/search?kt=1";
 /** The id of the lookup form (kennitala-lookup.tsx), so the search box can hand a kennitala over to it. */
 export const KENNITALA_LOOKUP_FORM_ID = "kennitala-lookup";
 
-// Ten digits, optionally split 6 + 4 by a hyphen and/or spaces, anywhere in the
-// query ("010130-2989", "kt. 0101302989", "Jón 010130 2989"). Wider than
-// KENNITALA_SHAPED (the whole query is a kennitala) on purpose.
-const KENNITALA_IN_QUERY = /\d{6}\s*-?\s*\d{4}/;
-
-/** True if a search query (a search param: string, array or missing) contains something like a kennitala. */
+/**
+ * True if a search query (a search param: string, array or missing) contains
+ * something like a kennitala anywhere ("010130-2989", "kt. 0101302989",
+ * "Jón 010130 – 2989"): the shared pattern in kennitala-pattern.ts, whether or
+ * not the number would parse.
+ */
 export function queryHasKennitala(value: string | string[] | null | undefined): boolean {
   const values = Array.isArray(value) ? value : [value];
-  return values.some((v) => typeof v === "string" && KENNITALA_IN_QUERY.test(v));
+  return values.some((v) => typeof v === "string" && hasKennitalaShape(v));
 }
 
 /**

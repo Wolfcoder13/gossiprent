@@ -26,7 +26,7 @@ export function RoleBadge({ role }: { role: UserRole | "property" }) {
   return <span className={`${BADGE} ${ROLE_STYLES[role]}`}>{t(ROLE_LABELS[role])}</span>;
 }
 
-/** "No account" / "Án aðgangs": a profile created by a review, not by its person signing up. */
+/** "No account" / "Án aðgangs": a profile whose person has no account (never signed up, or closed it). */
 export function NoAccountBadge() {
   const t = useT();
   return <span className={`${BADGE} bg-surface-muted text-muted`}>{t("common.noAccount")}</span>;

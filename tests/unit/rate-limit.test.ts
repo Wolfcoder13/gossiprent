@@ -41,7 +41,6 @@ import {
   clientIp,
   consumeAttempt,
   kennitalaCheckLimits,
-  kennitalaMismatchLimits,
   newProfileLimits,
   newReviewLimits,
   RATE_LIMITS,
@@ -130,7 +129,6 @@ describe("RATE_LIMITS", () => {
       kennitalaChecksPerUser: { max: 10, windowMs: 15 * MINUTE },
       kennitalaChecksPerUserDaily: { max: 50, windowMs: DAY },
       kennitalaChecksPerIp: { max: 100, windowMs: DAY },
-      kennitalaMismatchPerSubject: { max: 20, windowMs: DAY },
       newReviewsPerAuthor: { max: 20, windowMs: DAY },
       newProfilesPerAuthor: { max: 5, windowMs: DAY },
       reportsPerUser: { max: 10, windowMs: DAY },
@@ -152,7 +150,6 @@ describe("RATE_LIMITS", () => {
 
 describe("limits for kennitala checks, new reviews, new profiles and reports", () => {
   const USER = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
-  const SUBJECT = "9a0c0305-4f89-41d3-3f25-04e0e82c3301";
 
   it("limit kennitala checks per user in two windows, and per network when it's known", () => {
     expect(kennitalaCheckLimits(USER, "203.0.113.7")).toEqual([
@@ -166,10 +163,7 @@ describe("limits for kennitala checks, new reviews, new profiles and reports", (
     ]);
   });
 
-  it("limit mismatches per profile, new reviews and new profiles per author", () => {
-    expect(kennitalaMismatchLimits(SUBJECT)).toEqual([
-      { key: `kt:subject:${SUBJECT}`, ...RATE_LIMITS.kennitalaMismatchPerSubject },
-    ]);
+  it("limit new reviews and new profiles per author", () => {
     expect(newReviewLimits(USER)).toEqual([{ key: `review-new:user:${USER}`, ...RATE_LIMITS.newReviewsPerAuthor }]);
     expect(newProfileLimits(USER)).toEqual([{ key: `profile-new:user:${USER}`, ...RATE_LIMITS.newProfilesPerAuthor }]);
   });
@@ -186,7 +180,6 @@ describe("limits for kennitala checks, new reviews, new profiles and reports", (
   it("never put anything but ids and IP addresses in a key (no kennitala can reach one)", () => {
     const keys = [
       ...kennitalaCheckLimits(USER, "203.0.113.7"),
-      ...kennitalaMismatchLimits(SUBJECT),
       ...newReviewLimits(USER),
       ...newProfileLimits(USER),
       ...reportLimits(USER, "203.0.113.7"),

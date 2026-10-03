@@ -37,8 +37,9 @@ const VARIANTS = {
  * A search box: a plain GET form (`q`), so it works without JavaScript. With
  * JavaScript it never sends a kennitala: one typed here is moved into the
  * kennitala lookup form on the same page (and focused), or, where there's no
- * lookup form, the visitor is taken to it (/search?kt=1) without the number.
- * Without JavaScript the page itself redirects (redirectKennitalaQuery).
+ * lookup form, the visitor is taken to it (/search?kt=1, whose lookup field
+ * has autofocus) without the number. Without JavaScript the page itself
+ * redirects there (redirectKennitalaQuery).
  */
 export function SearchBox({
   action,

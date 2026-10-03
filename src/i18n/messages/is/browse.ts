@@ -67,7 +67,10 @@ export default {
     alsoRenter: "Einnig leigjandi",
     alsoLandlord: "Einnig leigusali",
     landlord: "Leigusali: {name}",
-    /** The landlord was named by a renter and has no account (so hasn't confirmed it). */
+    /**
+     * The landlord was named by a renter and has no account (so hasn't confirmed it). Not used for
+     * a landlord who listed or claimed the property and then closed their account.
+     */
     landlordUnconfirmed: "Leigusali: {name} (ekki staðfest)",
     noLandlord: "Leigusali er ekki enn á GossipRent",
   },

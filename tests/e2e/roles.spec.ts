@@ -6,19 +6,25 @@ import {
   checkLandlordButton,
   clickAndCancel,
   clickAndConfirm,
+  closeAccount,
+  confirmMessage,
   createActor,
   DEMO,
   escapeRegExp,
+  expectRelinkRefused,
   fillPropertyForm,
   fillReview,
   fillSignup,
   findPersonPath,
+  firstName,
+  FIX_FIELDS,
   formAlert,
   formStatus,
   freshKennitala,
   homeStat,
   landlordFoundAnswer,
   landlordKennitalaInput,
+  landlordLine,
   type Locale,
   languageButton,
   logInAs,
@@ -27,8 +33,13 @@ import {
   makeUser,
   myProfilePath,
   nameToken,
+  noAccountBadge,
+  noLandlord,
   otherRolePath,
+  personCard,
+  postButton,
   postReview,
+  propertyCard,
   propertyLabel,
   relationGroup,
   relationRadio,
@@ -41,6 +52,8 @@ import {
   signupKennitalaInput,
   summaryAverage,
   summaryCount,
+  unconfirmedNote,
+  withoutJavaScript,
   writeReviewByKennitala,
 } from "./helpers";
 
@@ -69,11 +82,6 @@ function heading(page: Page, name: string): Locator {
   return page.getByRole("heading", { name, exact: true });
 }
 
-/** A person's card in a directory (or search results), by name. */
-function personCard(page: Page, name: string): Locator {
-  return page.getByRole("main").getByRole("link", { name: new RegExp(escapeRegExp(name)) });
-}
-
 const ADDED_LANDLORD = "Done. You're now listed as a landlord too.";
 const ADDED_RENTER = "Done. You're now listed as a renter too.";
 const REMOVED_LANDLORD = "Done. You're no longer listed as a landlord.";
@@ -82,11 +90,13 @@ const KEPT_LANDLORD = "Renters have reviewed you, so this role stays.";
 const KEPT_RENTER = "Landlords have reviewed you, so this role stays.";
 const REVIEWED_AS_LANDLORD = "People have reviewed you as a landlord, so you can't remove that role.";
 const REVIEWED_AS_RENTER = "People have reviewed you as a renter, so you can't remove that role.";
+/** Dropping the landlord role unlinks your properties, and nobody else can link you to them again. */
 const CONFIRM_REMOVE_LANDLORD =
-  "Remove the landlord role? Your properties will no longer be linked to you. You can add the role back any time.";
+  "Remove the landlord role? Your properties will no longer be linked to you, and nobody else can link you to them again. You can add the role back any time and link a property to yourself again with “I manage this property” on its page.";
 const CONFIRM_REMOVE_RENTER = "Remove the renter role? You can add it back any time.";
-const NO_LANDLORD = "No landlord linked";
 const OWN_KENNITALA = "That's your own kennitala. You can't be the landlord of a place you rent.";
+const RELINK_DISCLAIMED =
+  "This person has said this isn't their property, so you can't link them to it. Only they can link it again, with “I manage this property”.";
 
 test.describe("signing up as both", () => {
   test("ticking both boxes makes a renter-and-landlord account", async ({ page }) => {
@@ -137,7 +147,7 @@ test.describe("signing up as both", () => {
     await expect(roleTab(page, "As a renter")).not.toHaveAttribute("aria-current", "page");
     await expect(page.getByText("This is your public profile.", { exact: false })).toBeVisible();
     // An account: no "No account" badge.
-    await expect(page.getByText("No account", { exact: true })).toHaveCount(0);
+    await expect(noAccountBadge(page)).toHaveCount(0);
 
     // Listed in both directories, each card linking to that role's page.
     await page.goto(`/landlords?q=${encodeURIComponent(user.name)}`);
@@ -270,7 +280,7 @@ test.describe("reviewing with both roles", () => {
     for (const path of [landlordPath, otherRolePath(landlordPath)]) {
       await page.goto(path);
       await expect(page.getByText("This is your public profile.", { exact: false }), path).toBeVisible();
-      await expect(page.getByRole("button", { name: "Post review" }), path).toHaveCount(0);
+      await expect(postButton(page), path).toHaveCount(0);
       await expect(page.getByRole("radio"), path).toHaveCount(0);
       await expect(reviewKennitalaInput(page), path).toHaveCount(0);
     }
@@ -278,7 +288,7 @@ test.describe("reviewing with both roles", () => {
     const propertyPath = await addProperty(page, makeProperty(), { relation: "own" });
     await page.goto(propertyPath);
     await expect(page.getByText("You're the landlord for this property.", { exact: false })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Post review" })).toHaveCount(0);
+    await expect(postButton(page)).toHaveCount(0);
     await expect(page.getByRole("link", { name: "Review this property" })).toHaveCount(0);
   });
 });
@@ -423,7 +433,7 @@ test.describe("profiles of people with both roles", () => {
     // His own property is on his landlord page.
     await expect(page.getByRole("heading", { name: "Properties (1)" })).toBeVisible();
     await expect(
-      page.getByRole("link", { name: new RegExp(escapeRegExp(propertyLabel(DEMO.properties.thorunnarstraeti))) }),
+      propertyCard(page, DEMO.properties.thorunnarstraeti),
     ).toBeVisible();
 
     await roleTab(page, "As a renter").click();
@@ -487,12 +497,7 @@ test.describe("dashboard: your roles", () => {
     await expect(roles.getByRole("status")).toHaveCount(0);
     await expect(roles.getByRole("button", { name: "Remove landlord role" })).toBeVisible();
 
-    let message = "";
-    page.once("dialog", (dialog) => {
-      message = dialog.message();
-      void dialog.accept();
-    });
-    await roles.getByRole("button", { name: "Remove landlord role" }).click();
+    const message = await confirmMessage(page, roles.getByRole("button", { name: "Remove landlord role" }));
     await expect(roles.getByRole("status")).toHaveText(REMOVED_LANDLORD);
     expect(message).toBe(CONFIRM_REMOVE_LANDLORD);
     await expect(roles).toContainText("Not a landlord");
@@ -518,12 +523,7 @@ test.describe("dashboard: your roles", () => {
     await postReview(landlord.page, renterPath, makeReview(3), user.kennitala);
 
     // Removing it from the stale page is refused by the server.
-    let message = "";
-    page.once("dialog", (dialog) => {
-      message = dialog.message();
-      void dialog.accept();
-    });
-    await roles.getByRole("button", { name: "Remove renter role" }).click();
+    const message = await confirmMessage(page, roles.getByRole("button", { name: "Remove renter role" }));
     const alert = roles.getByRole("alert");
     await expect(alert).toHaveText(REVIEWED_AS_RENTER);
     await expect(alert).toBeFocused();
@@ -607,7 +607,7 @@ test.describe("dashboard: your roles", () => {
     await signUp(page, user);
     const property = makeProperty();
     const propertyPath = await addProperty(page, property, { relation: "own" });
-    await expect(page.getByRole("main").getByText(`Landlord: ${user.name}`, { exact: true })).toBeVisible();
+    await expect(landlordLine(page, user.name)).toBeVisible();
     await page.goto("/dashboard");
     await expect(heading(page, "Your properties (1)")).toBeVisible();
 
@@ -616,14 +616,53 @@ test.describe("dashboard: your roles", () => {
     // It's now just a place they added.
     await expect(heading(page, "Properties you added (1)")).toBeVisible();
     await page.goto(propertyPath);
-    await expect(page.getByRole("main").getByText(NO_LANDLORD, { exact: true })).toBeVisible();
+    await expect(noLandlord(page)).toBeVisible();
     // Now just a renter, they may review the place, and (having added it) link its landlord.
     await expect(page.getByRole("heading", { name: `Review ${propertyLabel(property)}` })).toBeVisible();
     await expect(relinkForm(page).locator("summary")).toHaveText("Link the landlord");
     // The listing stays on the site.
     await page.goto(`/properties?q=${encodeURIComponent(property.address)}`);
-    await expect(page.getByRole("main").getByRole("link", { name: new RegExp(escapeRegExp(propertyLabel(property))) }))
-      .toContainText("Landlord not on GossipRent yet");
+    await expect(propertyCard(page, property)).toContainText("Landlord not on GossipRent yet");
+  });
+
+  test("after dropping the landlord role, a renter who named you can't link you back to that property", async ({
+    page,
+    browser,
+  }) => {
+    const user = makeUser("both");
+    await signUp(page, user);
+    // A renter adds the place they rent and names this person as its landlord.
+    const renter = await createActor(browser, "renter");
+    const propertyPath = await addProperty(renter.page, makeProperty(), { kennitala: user.kennitala });
+    await expect(landlordLine(renter.page, user.name)).toBeVisible();
+    await expect(relinkForm(renter.page)).toHaveCount(0);
+
+    await page.goto("/dashboard");
+    await expect(heading(page, "Your properties (1)")).toBeVisible();
+    const message = await confirmMessage(page, rolesCard(page).getByRole("button", { name: "Remove landlord role" }));
+    // The confirmation says so.
+    expect(message).toBe(CONFIRM_REMOVE_LANDLORD);
+    await expect(rolesCard(page).getByRole("status")).toHaveText(REMOVED_LANDLORD);
+
+    // The property has no landlord now, and the renter can't link them again.
+    await renter.page.goto(propertyPath);
+    await expect(noLandlord(renter.page)).toBeVisible();
+    await expect(relinkForm(renter.page).locator("summary")).toHaveText("Link the landlord");
+    await expectRelinkRefused(renter.page, user.kennitala, RELINK_DISCLAIMED);
+    await renter.page.reload();
+    await expect(noLandlord(renter.page)).toBeVisible();
+    // Nor did that give them the landlord role back.
+    await page.goto("/dashboard");
+    await expect(rolesCard(page)).toContainText("Not a landlord");
+
+    // They can link it to themselves again: add the role back and claim it.
+    await rolesCard(page).getByRole("button", { name: "I'm also a landlord" }).click();
+    await expect(rolesCard(page).getByRole("status")).toHaveText(ADDED_LANDLORD);
+    await page.goto(propertyPath);
+    await page.getByRole("button", { name: "I manage this property" }).click();
+    await expect(formStatus(page)).toHaveText("Done. You're now listed as this property's landlord.");
+    await expect(landlordLine(page, user.name)).toBeVisible();
+    await renter.context.close();
   });
 
   test("a landlord adds the renter role from a landlord's page, then goes back and reviews them", async ({
@@ -636,7 +675,7 @@ test.describe("dashboard: your roles", () => {
 
     await page.goto(other.profilePath);
     await expect(page.getByText("Only renters can review landlords.", { exact: false })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Post review" })).toHaveCount(0);
+    await expect(postButton(page)).toHaveCount(0);
     const addRole = page.getByRole("link", { name: "add the renter role to your account" });
     await expect(addRole).toHaveAttribute("href", `/dashboard?next=${encodeURIComponent(other.profilePath)}#roles`);
     await addRole.click();
@@ -656,7 +695,7 @@ test.describe("dashboard: your roles", () => {
     const review = makeReview(5);
     await reviewKennitalaInput(page).fill(other.user.kennitala);
     await fillReview(page, review);
-    await page.getByRole("button", { name: "Post review" }).click();
+    await postButton(page).click();
     await expect(formStatus(page)).toHaveText("Thanks! Your review is live.");
     await expect(reviewCard(page, review.title).getByText("Renter", { exact: true })).toBeVisible();
     await other.context.close();
@@ -737,7 +776,7 @@ test.describe("adding a property with both roles", () => {
     await expect(landlordKennitalaInput(page)).toBeVisible();
 
     await page.getByRole("button", { name: "Add property" }).click();
-    await expect(formAlert(page)).toHaveText("Please fix the highlighted fields.");
+    await expect(formAlert(page)).toHaveText(FIX_FIELDS);
     await expect(page.getByText(OWN_KENNITALA, { exact: true })).toBeVisible();
     await expect(page).toHaveURL(/\/properties\/new$/);
 
@@ -745,7 +784,7 @@ test.describe("adding a property with both roles", () => {
     await relationRadio(page, "own").check();
     await page.getByRole("button", { name: "Add property" }).click();
     await expect(page).toHaveURL(/\/properties\/[0-9a-f-]{36}$/);
-    await expect(page.getByRole("main").getByText(`Landlord: ${user.name}`, { exact: true })).toBeVisible();
+    await expect(landlordLine(page, user.name)).toBeVisible();
   });
 
   test("submitting without choosing shows an error on the choice and keeps what was typed", async ({ page }) => {
@@ -778,8 +817,8 @@ test.describe("adding a property with both roles", () => {
     await signUp(page, user);
     const property = makeProperty();
     await addProperty(page, property, { relation: "own" });
-    await expect(page.getByRole("main").getByText(`Landlord: ${user.name}`, { exact: true })).toBeVisible();
-    await expect(page.getByText("Added by a renter, not confirmed")).toHaveCount(0);
+    await expect(landlordLine(page, user.name)).toBeVisible();
+    await expect(unconfirmedNote(page)).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Not my property" })).toBeVisible();
     // Their own: no review form, and no landlord to change.
     await expect(page.getByText("You're the landlord for this property.", { exact: false })).toBeVisible();
@@ -789,7 +828,7 @@ test.describe("adding a property with both roles", () => {
     const landlordPath = await myProfilePath(page);
     await page.goto(landlordPath);
     await expect(page.getByRole("heading", { name: "Properties (1)" })).toBeVisible();
-    await expect(page.getByRole("link", { name: new RegExp(escapeRegExp(propertyLabel(property))) })).toBeVisible();
+    await expect(propertyCard(page, property)).toBeVisible();
     await page.goto("/dashboard");
     await expect(heading(page, "Your properties (1)")).toBeVisible();
     await expect(heading(page, "Places you added as a renter (0)")).toBeVisible();
@@ -804,7 +843,7 @@ test.describe("adding a property with both roles", () => {
     await signUp(page, user);
     const property = makeProperty();
     await addProperty(page, property, { relation: "rent", landlord: { kennitala: landlord.user.kennitala } });
-    await expect(page.getByRole("main").getByText(`Landlord: ${landlord.user.name}`, { exact: true })).toBeVisible();
+    await expect(landlordLine(page, landlord.user.name)).toBeVisible();
     // Not theirs, so they can review it.
     await expect(page.getByRole("heading", { name: `Review ${propertyLabel(property)}` })).toBeVisible();
 
@@ -814,13 +853,13 @@ test.describe("adding a property with both roles", () => {
       relation: "rent",
       landlord: { kennitala: freshKennitala(), name: newLandlord },
     });
-    await expect(page.getByRole("main").getByText(`Landlord: ${newLandlord}`, { exact: true })).toBeVisible();
-    await expect(page.getByText("Added by a renter, not confirmed", { exact: true })).toBeVisible();
+    await expect(landlordLine(page, newLandlord)).toBeVisible();
+    await expect(unconfirmedNote(page)).toBeVisible();
 
     // Or without a landlord.
     const unlinked = makeProperty();
     await addProperty(page, unlinked, { relation: "rent" });
-    await expect(page.getByRole("main").getByText(NO_LANDLORD, { exact: true })).toBeVisible();
+    await expect(noLandlord(page)).toBeVisible();
 
     await page.goto("/dashboard");
     await expect(heading(page, "Your properties (0)")).toBeVisible();
@@ -879,11 +918,7 @@ test.describe("adding a property with both roles", () => {
   }) => {
     const landlord = await createActor(browser, "landlord");
     await signUp(page, makeUser("both"));
-    const context = await browser.newContext({
-      javaScriptEnabled: false,
-      storageState: await page.context().storageState(),
-    });
-    const noJs = await context.newPage();
+    const noJs = await withoutJavaScript(browser, page);
     const property = makeProperty();
     await noJs.goto("/properties/new");
     await expect(landlordKennitalaInput(noJs)).toBeHidden();
@@ -892,8 +927,8 @@ test.describe("adding a property with both roles", () => {
     await expect(landlordKennitalaInput(noJs)).toBeVisible();
     await fillPropertyForm(noJs, property, { relation: "rent", landlord: { kennitala: landlord.user.kennitala } });
     await expect(noJs).toHaveURL(/\/properties\/[0-9a-f-]{36}$/);
-    await expect(noJs.getByRole("main").getByText(`Landlord: ${landlord.user.name}`, { exact: true })).toBeVisible();
-    await context.close();
+    await expect(landlordLine(noJs, landlord.user.name)).toBeVisible();
+    await noJs.context().close();
     await landlord.context.close();
   });
 
@@ -927,12 +962,12 @@ test.describe("claiming and reviewing with both roles", () => {
 
     // Before reviewing it, they could claim it.
     await page.goto(path);
-    await expect(page.getByRole("main").getByText(NO_LANDLORD, { exact: true })).toBeVisible();
+    await expect(noLandlord(page)).toBeVisible();
     await expect(page.getByRole("button", { name: "I manage this property" })).toBeVisible();
 
     const review = makeReview(4);
     await fillReview(page, review);
-    await page.getByRole("button", { name: "Post review" }).click();
+    await postButton(page).click();
     await expect(formStatus(page)).toHaveText("Thanks! Your review is live.");
     await page.reload();
     await expect(reviewCard(page, review.title)).toBeVisible();
@@ -958,7 +993,7 @@ test.describe("claiming and reviewing with both roles", () => {
     await other.goto(path);
     const review = makeReview(3);
     await fillReview(other, review);
-    await other.getByRole("button", { name: "Post review" }).click();
+    await postButton(other).click();
     await expect(formStatus(other)).toHaveText("Thanks! Your review is live.");
 
     await page.getByRole("button", { name: "I manage this property" }).click();
@@ -966,7 +1001,7 @@ test.describe("claiming and reviewing with both roles", () => {
       "You've reviewed this property as a renter, so you can't also be its landlord. Delete your review first.",
     );
     await page.reload();
-    await expect(page.getByRole("main").getByText(NO_LANDLORD, { exact: true })).toBeVisible();
+    await expect(noLandlord(page)).toBeVisible();
     await expect(reviewCard(page, review.title)).toBeVisible();
     await renter.context.close();
   });
@@ -990,7 +1025,7 @@ test.describe("claiming and reviewing with both roles", () => {
     // The review is still up, and the panel says how to get back to editing it.
     await expect(reviewCard(page, review.title)).toBeVisible();
     await expect(page.getByRole("button", { name: "Update review" })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Post review" })).toHaveCount(0);
+    await expect(postButton(page)).toHaveCount(0);
     const panel = page.locator("#your-review");
     await expect(panel).toHaveText(
       "You reviewed this landlord as a renter. To edit that review, add the renter role to your account again. You can still delete it from the reviews list.",
@@ -1023,14 +1058,12 @@ test.describe("closing an account with both roles", () => {
     const review = makeReview(2);
     await postReview(landlord.page, renterPath, review, user.kennitala);
 
-    await page.goto("/dashboard");
-    await clickAndConfirm(page, page.getByRole("button", { name: "Close my account" }));
-    await expect(page).toHaveURL(/\/\?account=deleted$/);
+    await closeAccount(page);
 
     // The renter page stays (now without an account), with the review; no role tabs.
     await page.goto(renterPath);
     await expect(page.getByRole("heading", { level: 1, name: user.name })).toBeVisible();
-    await expect(page.getByText("No account", { exact: true })).toBeVisible();
+    await expect(noAccountBadge(page)).toBeVisible();
     await expect(reviewCard(page, review.title)).toBeVisible();
     await expect(roleTabs(page)).toHaveCount(0);
     await expect(heading(page, "Reviews (1)")).toBeVisible();
@@ -1058,15 +1091,15 @@ test.describe("closing an account with both roles", () => {
     const landlord = await createActor(browser, "landlord");
     await postReview(landlord.page, otherRolePath(landlordPath), makeReview(4), user.kennitala);
 
-    await page.goto("/dashboard");
-    await clickAndConfirm(page, page.getByRole("button", { name: "Close my account" }));
-    await expect(page).toHaveURL(/\/\?account=deleted$/);
+    await closeAccount(page);
 
     await page.goto(propertyPath);
-    await expect(page.getByRole("main").getByText(`Landlord: ${user.name}`, { exact: true })).toBeVisible();
+    await expect(landlordLine(page, user.name)).toBeVisible();
+    // They listed it as their own, so it isn't marked "not confirmed".
+    await expect(unconfirmedNote(page)).toHaveCount(0);
     await page.goto(landlordPath);
     await expect(page).toHaveURL(landlordPath);
-    await expect(page.getByText("No account", { exact: true })).toBeVisible();
+    await expect(noAccountBadge(page)).toBeVisible();
     await expect(page.getByRole("heading", { name: "Properties (1)" })).toBeVisible();
     await expect(roleTab(page, "As a landlord")).toHaveText("As a landlord (no reviews)");
     await expect(roleTab(page, "As a renter")).toHaveAccessibleName(/^As a renter \(4 stars ?, 1 review\)$/);
@@ -1101,7 +1134,7 @@ test.describe("in Icelandic", () => {
     await setLanguage(page.context(), "is");
     await page.goto("/dashboard");
     await expect(page).toHaveTitle("Mínar síður · GossipRent");
-    await expect(page.getByRole("heading", { level: 1, name: `Hæ, ${user.name.split(" ")[0]}` })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: `Hæ, ${firstName(user.name)}` })).toBeVisible();
     await expect(heading(page, "Umsagnir um þig sem leigusala (0)")).toBeVisible();
     await expect(heading(page, "Umsagnir um þig sem leigjanda (0)")).toBeVisible();
     await expect(heading(page, "Eignirnar þínar (0)")).toBeVisible();
@@ -1112,12 +1145,7 @@ test.describe("in Icelandic", () => {
       new RegExp(`^Leigjandi\\s*${IS.removeRenter}$`),
     ]);
 
-    let message = "";
-    page.once("dialog", (dialog) => {
-      message = dialog.message();
-      void dialog.accept();
-    });
-    await roles.getByRole("button", { name: IS.removeRenter }).click();
+    const message = await confirmMessage(page, roles.getByRole("button", { name: IS.removeRenter }));
     await expect(roles.getByRole("status")).toHaveText(IS.removedRenter);
     expect(message).toBe(IS.confirmRemoveRenter);
     await expect(roles.getByRole("listitem")).toHaveText([/^Leigusali$/, new RegExp(`^Ekki leigjandi\\s*${IS.addRenter}$`)]);

@@ -7,13 +7,20 @@ import {
   DEMO,
   DEMO_PASSWORD,
   demoProfilePath,
+  expectNoKennitala,
+  expectNoKennitalaInUrls,
   fillLogin,
   fillSignup,
+  firstName,
+  FIX_FIELDS,
   formAlert,
   formatKennitala,
   formStatus,
   freshKennitala,
-  kennitalaVariants,
+  idOf,
+  KEPT_NAME,
+  keptNameNotice,
+  landlordLine,
   logIn,
   logInAs,
   logOut,
@@ -21,44 +28,32 @@ import {
   makeReview,
   makeUser,
   myProfilePath,
+  NAME_LOCKED,
   nameToken,
+  NO_MATCH,
   NOT_A_KENNITALA,
+  notYouLink,
+  personCard,
   roleCheckbox,
   setLanguage,
   signUp,
   signupKennitalaInput,
   uid,
+  unconfirmedNote,
   writeReviewByKennitala,
 } from "./helpers";
 
 const SESSION_COOKIE = "gossiprent_session";
-const NO_MATCH = "That email and password don't match an account.";
 const KENNITALA_TAKEN = "This kennitala already has an account.";
-const KEPT_NAME = "People had already reviewed you, so your page keeps the name they used. If it's wrong, report it.";
-const NAME_LOCKED = "Your name can't be changed after people have reviewed you. If it's wrong, report it.";
 
 /** The "Kennitala" field's error (its accessible description is the hints, then the error). */
 async function expectKennitalaError(page: Page, message: string): Promise<void> {
   const field = signupKennitalaInput(page);
-  await expect(formAlert(page)).toHaveText("Please fix the highlighted fields.");
+  await expect(formAlert(page)).toHaveText(FIX_FIELDS);
   await expect(page.getByText(message, { exact: true })).toBeVisible();
   await expect(field).toHaveAttribute("aria-invalid", "true");
   await expect(field).toHaveAccessibleDescription(new RegExp(`${message.replace(/[.?]/g, "\\$&")}$`));
   await expect(page).toHaveURL(/\/signup$/);
-}
-
-/** The "Not you? Report it" link shown under the kennitala field. */
-function notYouLink(page: Page): Locator {
-  return page.getByRole("main").getByRole("link", { name: "Not you? Report it" });
-}
-
-/** The dashboard notice shown after taking over a profile that kept the reviewers' name. */
-function keptNameNotice(page: Page): Locator {
-  return page.getByRole("main").getByRole("status").filter({ hasText: "People had already reviewed you" });
-}
-
-function firstName(name: string): string {
-  return name.split(" ")[0];
 }
 
 /**
@@ -107,12 +102,11 @@ test.describe("sign up", () => {
     await expect(page.getByRole("main").getByText("No account", { exact: true })).toHaveCount(0);
     await expect(page.getByText(user.email)).toHaveCount(0);
     await expect(page.getByText("No reviews for", { exact: false })).toBeVisible();
-    const html = await page.content();
-    for (const variant of kennitalaVariants(user.kennitala)) expect(html).not.toContain(variant);
+    expectNoKennitala(await page.content(), user.kennitala, path);
 
     // Listed in the renters directory.
     await page.goto(`/renters?q=${encodeURIComponent(user.name)}`);
-    const card = page.getByRole("main").getByRole("link", { name: new RegExp(user.name) });
+    const card = personCard(page, user.name);
     await expect(card).toHaveAttribute("href", path);
     expect(await cardMeta(card)).toEqual(["Renter"]);
     expect(await cardSubtitle(card)).toBe(user.city);
@@ -146,7 +140,7 @@ test.describe("sign up", () => {
     await expect(page.getByRole("heading", { name: "Properties (0)" })).toBeVisible();
 
     await page.goto(`/landlords?q=${encodeURIComponent(user.name)}`);
-    const card = page.getByRole("main").getByRole("link", { name: new RegExp(user.name) });
+    const card = personCard(page, user.name);
     await expect(card).toHaveAttribute("href", path);
     expect(await cardSubtitle(card)).toBe("No properties yet");
     expect(await cardMeta(card)).toEqual(["Landlord"]);
@@ -213,7 +207,7 @@ test.describe("sign up", () => {
     await expect(page.getByText(`Your kennitala: ${formatKennitala(kennitala)}`, { exact: true })).toBeVisible();
     await expect(page.getByText("Only you can see it here. It's never shown publicly.")).toBeVisible();
     // Signing up didn't put it in the URL.
-    for (const variant of kennitalaVariants(kennitala)) expect(page.url()).not.toContain(variant);
+    expectNoKennitalaInUrls([page.url()], kennitala);
 
     // The same number with a hyphen is the same person: it already has an account now.
     const copy = makeUser("renter", { kennitala: ` ${formatKennitala(kennitala)} ` });
@@ -228,7 +222,7 @@ test.describe("sign up", () => {
   test("shows every validation error and keeps what was typed (except the password)", async ({ page }) => {
     await page.goto("/signup");
     await page.getByRole("button", { name: "Create account" }).click();
-    await expect(formAlert(page)).toHaveText("Please fix the highlighted fields.");
+    await expect(formAlert(page)).toHaveText(FIX_FIELDS);
     await expect(page.getByText("Choose at least one: renter, landlord, or both.")).toBeVisible();
     // Each checkbox is marked invalid and described by the error (aria-invalid
     // isn't allowed on a fieldset/group).
@@ -485,7 +479,7 @@ test.describe("sign up: taking over a profile without an account", () => {
     const reviewedName = `Gudrun ${nameToken()}`;
     const review = makeReview(4);
     const path = await writeReviewByKennitala(reviewer.page, "landlord", { kennitala, name: reviewedName }, review);
-    const id = path.split("/").pop();
+    const id = idOf(path);
 
     await page.goto(path);
     await expect(page.getByRole("heading", { level: 1, name: reviewedName })).toBeVisible();
@@ -588,8 +582,8 @@ test.describe("sign up: taking over a profile without an account", () => {
     const kennitala = freshKennitala();
     const linkedName = `Larus ${nameToken()}`;
     const propertyPath = await addProperty(renter.page, makeProperty(), { kennitala, name: linkedName });
-    await expect(renter.page.getByText(`Landlord: ${linkedName}`)).toBeVisible();
-    await expect(renter.page.getByText("Added by a renter, not confirmed")).toBeVisible();
+    await expect(landlordLine(renter.page, linkedName)).toBeVisible();
+    await expect(unconfirmedNote(renter.page)).toBeVisible();
 
     // The landlord signs up with that kennitala: the page keeps the name the renter typed.
     const user = makeUser("landlord", { kennitala });
@@ -601,8 +595,8 @@ test.describe("sign up: taking over a profile without an account", () => {
 
     // The property now has a confirmed landlord, who can unlink it.
     await page.goto(propertyPath);
-    await expect(page.getByText(`Landlord: ${linkedName}`)).toBeVisible();
-    await expect(page.getByText("Added by a renter, not confirmed")).toHaveCount(0);
+    await expect(landlordLine(page, linkedName)).toBeVisible();
+    await expect(unconfirmedNote(page)).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Not my property" })).toBeVisible();
     await renter.context.close();
   });
@@ -924,7 +918,7 @@ test.describe("changing your password", () => {
     await fields.next.fill("brand-new-password");
     await fields.confirm.fill("brand-new-password");
     await section.getByRole("button", { name: "Change password" }).click();
-    await expect(section.getByRole("alert")).toHaveText("Please fix the highlighted fields.");
+    await expect(section.getByRole("alert")).toHaveText(FIX_FIELDS);
     await expect(section.getByText("That isn't your current password.")).toBeVisible();
     await expect(fields.current).toHaveAttribute("aria-invalid", "true");
     await expect(fields.current).toHaveAccessibleDescription("That isn't your current password.");
@@ -971,7 +965,7 @@ test.describe("changing your password", () => {
     await fields.next.fill("brand-new-password");
     await fields.confirm.fill("brand-new-passwrod");
     await section.getByRole("button", { name: "Change password" }).click();
-    await expect(section.getByRole("alert")).toHaveText("Please fix the highlighted fields.");
+    await expect(section.getByRole("alert")).toHaveText(FIX_FIELDS);
     await expect(fields.confirm).toHaveAttribute("aria-invalid", "true");
     await expect(fields.confirm).toHaveAccessibleDescription("The new passwords don't match.");
     await expect(fields.confirm).toBeFocused();

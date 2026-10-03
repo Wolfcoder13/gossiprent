@@ -19,11 +19,16 @@ const CHOICE_HINT = {
   landlord: "reviews.wizard.choose.landlordHint",
   renter: "reviews.wizard.choose.renterHint",
 } as const;
+// Asking for a kind you can't write: the same words as the review box on a profile.
+const NOT_ALLOWED = { landlord: "reviews.panel.notAllowed.landlord", renter: "reviews.panel.notAllowed.renter" } as const;
+const ADD_ROLE = { landlord: "reviews.panel.addRole.landlord", renter: "reviews.panel.addRole.renter" } as const;
 
 /**
  * Write a review of a landlord or renter by kennitala: choose who (?kind=),
  * enter their kennitala, see who it belongs to, then write the review.
- * Property reviews are written on the property's page.
+ * Property reviews are written on the property's page. Asking for a kind the
+ * viewer can't write says why (with a link to add the role) above the kinds
+ * they can write.
  */
 export default async function NewReviewPage({ searchParams }: PageProps<"/reviews/new">) {
   const { kind: wanted } = await searchParams;
@@ -36,12 +41,28 @@ export default async function NewReviewPage({ searchParams }: PageProps<"/review
   const reviewsProperties = hasRole(user, "renter");
   // Someone who can only review renters has nothing to choose.
   const only = kinds.length === 1 && !reviewsProperties ? kinds[0] : undefined;
-  const kind = requested && kinds.includes(requested) ? requested : only;
+  const refused = requested && !kinds.includes(requested) ? requested : undefined;
+  const kind = refused ? undefined : (requested ?? only);
 
   return (
     <div className="mx-auto max-w-2xl px-4 py-10 sm:px-6">
       <h1 className="text-3xl font-bold tracking-tight text-ink">{t("reviews.wizard.title")}</h1>
       <p className="mt-2 text-muted">{t("reviews.wizard.intro")}</p>
+
+      {refused && (
+        <p className="mt-8 rounded-2xl border border-line bg-surface-muted px-5 py-4 text-sm text-ink">
+          {t.rich(NOT_ALLOWED[refused], {
+            addRole: (
+              <Link
+                href={`/dashboard?next=${encodeURIComponent(`/reviews/new?kind=${refused}`)}#roles`}
+                className="font-semibold text-brand hover:underline"
+              >
+                {t(ADD_ROLE[reviewerRole(refused)])}
+              </Link>
+            ),
+          })}
+        </p>
+      )}
 
       {kind ? (
         <div className="mt-8 rounded-2xl border border-line bg-surface p-6 shadow-sm">

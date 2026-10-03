@@ -1,6 +1,6 @@
 import { expect, type Browser, type BrowserContext, type Locator, type Page } from "@playwright/test";
 import { DEMO, DEMO_PASSWORD } from "../../src/db/demo-people";
-import { isAdultKennitala, parseKennitalaInput } from "../../src/lib/kennitala";
+import { formatKennitala, isAdultKennitala, parseKennitalaInput } from "../../src/lib/kennitala";
 import { placeName } from "../../src/lib/postcodes";
 import { normalizeText, normalizeUnit } from "../../src/lib/text";
 
@@ -20,7 +20,7 @@ export type DemoAccountKey = {
   [K in DemoPersonKey]: DemoPeople[K] extends { email: string } ? K : never;
 }[DemoPersonKey];
 
-type Role = "landlord" | "renter";
+export type Role = "landlord" | "renter";
 /** What an account signs up as: one role, or both. */
 type Roles = Role | "both";
 
@@ -33,6 +33,34 @@ export type TestUser = {
   kennitala: string;
   city?: string;
 };
+
+// ---------------------------------------------------------------------------
+// UI text used by more than one spec (src/i18n/messages/en)
+// ---------------------------------------------------------------------------
+
+/** A form's error banner when fields need fixing. */
+export const FIX_FIELDS = "Please fix the highlighted fields.";
+export const NO_MATCH = "That email and password don't match an account.";
+export const NAME_LOCKED = "Your name can't be changed after people have reviewed you. If it's wrong, report it.";
+export const KEPT_NAME =
+  "People had already reviewed you, so your page keeps the name they used. If it's wrong, report it.";
+export const CANT_REMOVE =
+  "You can't remove reviews other people write about you, but you can report one that breaks the rules.";
+/** On a person's page without an account, however it came to be (a review, a renter's property, a closed account). */
+export const NO_ACCOUNT_NOTE =
+  "This person doesn't have a GossipRent account and doesn't manage this page. The name may have been entered by someone else. Is this you? Sign up with your kennitala to take over the page. Reviews others wrote about you stay on it.";
+/** The same for a company (which can't sign up). */
+export const COMPANY_NO_ACCOUNT_NOTE =
+  "This company doesn't have a GossipRent account and doesn't manage this page. The name may have been entered by someone else.";
+export const MISMATCH =
+  "That kennitala doesn't match this profile. Several people can share a name, so check you're on the right page.";
+export const INVALID_KENNITALA = "That isn't a valid kennitala. Enter 10 digits, e.g. 123456-7890.";
+export const NO_KENNITALA_IN_TEXT = "Don't include a kennitala here. ID numbers are never shown on GossipRent.";
+/** /search?kt=1, after a kennitala was typed into a search box. */
+export const KENNITALA_POINTER = "To look up a kennitala, use the form below.";
+/** Next to a landlord a renter named who has no account. */
+export const UNCONFIRMED = "Added by a renter, not confirmed";
+export const NO_LANDLORD = "No landlord linked";
 
 // ---------------------------------------------------------------------------
 // Unique values
@@ -66,6 +94,16 @@ export function nameToken(): string {
   const random = Array.from({ length: 3 }, () => LETTERS[Math.floor(Math.random() * 26)]).join("");
   const token = `${inLetters(Date.now())}${inLetters(counter)}${random}`;
   return token[0].toUpperCase() + token.slice(1);
+}
+
+/** A unique person's name, letters only: "Gervi Bqhzkxlwpcb". */
+export function personName(first = "Gervi"): string {
+  return `${first} ${nameToken()}`;
+}
+
+/** "Sigrún Helgadóttir" → "Sigrún", as the dashboard greets people ("Hi, Sigrún"). */
+export function firstName(name: string): string {
+  return name.split(" ")[0];
 }
 
 // ---------------------------------------------------------------------------
@@ -117,23 +155,117 @@ export function freshKennitala(kind: "adult" | "minor" | "company" = "adult"): s
   }
 }
 
-/** "0101302129" → "010130-2129", how the app echoes a kennitala back to the person who typed it. */
-export function formatKennitala(kennitala: string): string {
-  const digits = kennitala.replace(/\D/g, "");
-  return `${digits.slice(0, 6)}-${digits.slice(6)}`;
-}
-
-/**
- * The ways a kennitala could appear in a page or URL ("0101302129",
- * "010130-2129", "010130 2129"), for checking that it doesn't.
- */
-export function kennitalaVariants(kennitala: string): string[] {
-  const digits = kennitala.replace(/\D/g, "");
-  return [digits, `${digits.slice(0, 6)}-${digits.slice(6)}`, `${digits.slice(0, 6)} ${digits.slice(6)}`];
-}
+/** "0101302129" → "010130-2129": how the app echoes a kennitala back to the person who typed it (the app's own formatter). */
+export { formatKennitala };
 
 /** Not a kennitala (month 34), as in the app's own hints. */
 export const NOT_A_KENNITALA = "123456-7890";
+
+// ---------------------------------------------------------------------------
+// Dates, as the site writes them (Iceland's time zone)
+// ---------------------------------------------------------------------------
+
+const TIME_ZONE = "Atlantic/Reykjavik";
+
+/** "October 2026" / "október 2026": "Member since", "First reviewed", "Listed". */
+export function monthYear(date: Date, locale: Locale = "en"): string {
+  return new Intl.DateTimeFormat(INTL_TAG[locale], { month: "long", year: "numeric", timeZone: TIME_ZONE }).format(date);
+}
+
+/** This month, as monthYear writes it. */
+export function thisMonth(locale: Locale = "en"): string {
+  return monthYear(new Date(), locale);
+}
+
+/**
+ * A person's date of birth from their kennitala (DDMMYY plus the century
+ * digit: 9 = 1900s, 0 = 2000s), as forms show it: "15 May 1980" / "15. maí 1980".
+ */
+export function birthDate(kennitala: string, locale: Locale = "en"): string {
+  const digits = kennitala.replace(/\D/g, "");
+  const century = ({ "8": 1800, "9": 1900, "0": 2000 } as Record<string, number>)[digits[9]];
+  const date = new Date(
+    Date.UTC(century + Number(digits.slice(4, 6)), Number(digits.slice(2, 4)) - 1, Number(digits.slice(0, 2))),
+  );
+  return new Intl.DateTimeFormat(INTL_TAG[locale], {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    timeZone: TIME_ZONE,
+  }).format(date);
+}
+
+// ---------------------------------------------------------------------------
+// Keeping kennitalas out of pages and URLs
+// ---------------------------------------------------------------------------
+
+/**
+ * Every way a kennitala could appear in a page or a URL: "0101302129",
+ * "010130-2129", "010130 2129", and the space or hyphen percent- or
+ * form-encoded ("010130%202129", "010130+2129", "010130%2D2129").
+ */
+export function kennitalaVariants(kennitala: string): string[] {
+  const digits = kennitala.replace(/\D/g, "");
+  const [birth, rest] = [digits.slice(0, 6), digits.slice(6)];
+  return [digits, `${birth}-${rest}`, `${birth} ${rest}`, `${birth}%20${rest}`, `${birth}+${rest}`, `${birth}%2D${rest}`];
+}
+
+/**
+ * Where `text` (a page, a payload, a URL) contains any of `kennitalas`, in any
+ * form, each quoted with a little of the text around it rather than all of it.
+ */
+export function kennitalaLeaks(text: string, kennitalas: string | readonly string[], where: string): string[] {
+  const leaks: string[] = [];
+  for (const kennitala of typeof kennitalas === "string" ? [kennitalas] : kennitalas) {
+    for (const variant of kennitalaVariants(kennitala)) {
+      const at = text.indexOf(variant);
+      if (at !== -1) leaks.push(`${where} contains ${variant}: …${text.slice(Math.max(0, at - 80), at + 40)}…`);
+    }
+  }
+  return leaks;
+}
+
+/**
+ * Fails if `text` contains any of `kennitalas`, however written. One expect
+ * per text, not per kennitala and variant: every expect() is a recorded step,
+ * and tens of thousands of them take minutes.
+ */
+export function expectNoKennitala(text: string, kennitalas: string | readonly string[], where: string): void {
+  expect(kennitalaLeaks(text, kennitalas, where)).toEqual([]);
+}
+
+/** The kennitala is nowhere in the page's HTML or its URL. */
+export async function expectNoKennitalaOnPage(page: Page, kennitalas: string | readonly string[]): Promise<void> {
+  const url = page.url();
+  expectNoKennitala(await page.content(), kennitalas, `${url} (HTML)`);
+  expectNoKennitalaInUrls([url], kennitalas);
+}
+
+/**
+ * Record the URL of every request a page, or every page of a context, makes
+ * from now on (navigations, redirects, fetches, RSC requests, server actions, assets).
+ */
+export function recordRequests(target: Page | BrowserContext): string[] {
+  const urls: string[] = [];
+  target.on("request", (request) => urls.push(request.url()));
+  return urls;
+}
+
+/** Fails if any of `urls` carries one of `kennitalas`, as typed, percent-encoded or form-encoded. */
+export function expectNoKennitalaInUrls(urls: readonly string[], kennitalas: string | readonly string[]): void {
+  const leaks: string[] = [];
+  for (const url of urls) {
+    leaks.push(...kennitalaLeaks(url, kennitalas, `request ${url}`));
+    let decoded = url;
+    try {
+      decoded = decodeURIComponent(url.replace(/\+/g, " "));
+    } catch {
+      // Not valid percent-encoding: the raw check above covers it.
+    }
+    if (decoded !== url) leaks.push(...kennitalaLeaks(decoded, kennitalas, `request ${url} (decoded)`));
+  }
+  expect(leaks).toEqual([]);
+}
 
 // ---------------------------------------------------------------------------
 // Language
@@ -143,6 +275,8 @@ export type Locale = "is" | "en";
 
 /** Each language's name for itself: the label of the button that switches to it. */
 export const LANGUAGE_NAME: Record<Locale, string> = { is: "Íslenska", en: "English" };
+
+const INTL_TAG: Record<Locale, string> = { is: "is-IS", en: "en-GB" };
 
 /**
  * Give a browser context the Icelandic or English site (sets the httpOnly
@@ -177,6 +311,86 @@ export async function switchLanguage(page: Page, to: Locale, where: "header" | "
 }
 
 // ---------------------------------------------------------------------------
+// Any page
+// ---------------------------------------------------------------------------
+
+/** The id at the end of a profile or property path ("/landlords/<uuid>" → "<uuid>"). */
+export function idOf(path: string): string {
+  return path.split("/").pop()!;
+}
+
+/** The page's <meta name="robots">. */
+export function robotsMeta(page: Page): Locator {
+  return page.locator('meta[name="robots"]');
+}
+
+/** How far the page can scroll sideways (0 or less: not at all). */
+export async function horizontalOverflow(page: Page): Promise<number> {
+  return page.evaluate(() => document.scrollingElement!.scrollWidth - window.innerWidth);
+}
+
+/** Console errors and uncaught page errors (e.g. hydration mismatches) from now on. */
+export function watchErrors(page: Page): string[] {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(`page error: ${error.message}`));
+  page.on("console", (message) => {
+    if (message.type() === "error") errors.push(`console error: ${message.text()}`);
+  });
+  return errors;
+}
+
+/**
+ * A new page with JavaScript turned off, signed in as whoever `page` is signed
+ * in as (and in the same language). Close it with `noJs.context().close()`.
+ */
+export async function withoutJavaScript(browser: Browser, page: Page): Promise<Page> {
+  const context = await browser.newContext({
+    javaScriptEnabled: false,
+    storageState: await page.context().storageState(),
+  });
+  return context.newPage();
+}
+
+/** A form's error banner (scoped to <main>: Next's route announcer is also role="alert"). */
+export function formAlert(page: Page): Locator {
+  return page.getByRole("main").getByRole("alert");
+}
+
+/**
+ * A form's success banner. (On pages with a search box, that box has its own,
+ * usually empty, role="status" line: scope to the form there.)
+ */
+export function formStatus(page: Page): Locator {
+  return page.getByRole("main").getByRole("status");
+}
+
+/** Accept the next window.confirm() and click `button`. */
+export async function clickAndConfirm(page: Page, button: Locator): Promise<void> {
+  page.once("dialog", (dialog) => {
+    expect(dialog.type()).toBe("confirm");
+    void dialog.accept();
+  });
+  await button.click();
+}
+
+/** Dismiss the next window.confirm() and click `button`. */
+export async function clickAndCancel(page: Page, button: Locator): Promise<void> {
+  page.once("dialog", (dialog) => void dialog.dismiss());
+  await button.click();
+}
+
+/** Accept the next window.confirm(), click `button`, and return the dialog's text. */
+export async function confirmMessage(page: Page, button: Locator): Promise<string> {
+  const dialog = page.waitForEvent("dialog");
+  const clicked = button.click();
+  const shown = await dialog;
+  const message = shown.message();
+  await shown.accept();
+  await clicked;
+  return message;
+}
+
+// ---------------------------------------------------------------------------
 // Accounts
 // ---------------------------------------------------------------------------
 
@@ -185,12 +399,14 @@ const FIRST_NAME: Record<Roles, string> = { landlord: "Lana", renter: "Remy", bo
 /**
  * A brand-new user (not yet signed up) with a unique name, email and
  * kennitala (freshKennitala()). Names are letters only ("Remy Bqhzkxlwpcb").
+ * The city, "Testbær", isn't a real town: other specs count search results
+ * for real towns, so a test that needs one gives a unique made-up one.
  */
 export function makeUser(role: Roles, overrides: Partial<TestUser> = {}): TestUser {
   const id = uid();
   return {
     role,
-    name: `${FIRST_NAME[role]} ${nameToken()}`,
+    name: personName(FIRST_NAME[role]),
     email: `e2e-${role}-${id}@example.com`,
     password: `pw-${id}-secret`,
     kennitala: freshKennitala(),
@@ -242,8 +458,18 @@ export async function signUp(page: Page, user: TestUser): Promise<void> {
   await expect(page).toHaveURL(/\/dashboard(\?name=kept)?$/);
   const keptName = new URL(page.url()).searchParams.get("name") === "kept";
   await expect(
-    page.getByRole("heading", { level: 1, name: keptName ? /^Hi, / : `Hi, ${user.name.split(" ")[0]}` }),
+    page.getByRole("heading", { level: 1, name: keptName ? /^Hi, / : `Hi, ${firstName(user.name)}` }),
   ).toBeVisible();
+}
+
+/** The "Not you? Report it" link under a refused kennitala on the sign-up form. */
+export function notYouLink(page: Page): Locator {
+  return page.getByRole("main").getByRole("link", { name: "Not you? Report it" });
+}
+
+/** The dashboard notice shown after taking over a profile that kept the reviewers' name (KEPT_NAME). */
+export function keptNameNotice(page: Page): Locator {
+  return page.getByRole("main").getByRole("status").filter({ hasText: "People had already reviewed you" });
 }
 
 /** Fill and submit the login form on the current page. */
@@ -272,17 +498,19 @@ export async function logOut(page: Page): Promise<void> {
   await expect(header.getByRole("link", { name: "Log in", exact: true })).toBeVisible();
 }
 
-/** A form's error banner (scoped to <main>: Next's route announcer is also role="alert"). */
-export function formAlert(page: Page): Locator {
-  return page.getByRole("main").getByRole("alert");
+export const CLOSED_NOTICE = "Your account is closed and the reviews you wrote have been deleted.";
+
+/** The notice on the home page after closing an account (the page has other, empty, status lines). */
+export function closedNotice(page: Page): Locator {
+  return page.getByRole("main").getByRole("status").filter({ hasText: CLOSED_NOTICE });
 }
 
-/**
- * A form's success banner. (On pages with a search box, that box has its own,
- * usually empty, role="status" line: scope to the form there.)
- */
-export function formStatus(page: Page): Locator {
-  return page.getByRole("main").getByRole("status");
+/** Close the signed-in account from the dashboard and wait for the home page's notice. */
+export async function closeAccount(page: Page): Promise<void> {
+  await page.goto("/dashboard");
+  await clickAndConfirm(page, page.getByRole("button", { name: "Close my account" }));
+  await expect(page).toHaveURL(/\/\?account=deleted$/);
+  await expect(closedNotice(page)).toHaveText(CLOSED_NOTICE);
 }
 
 // ---------------------------------------------------------------------------
@@ -327,14 +555,19 @@ export async function createActor(
   return { user, context, page, profilePath };
 }
 
+/**
+ * A person's card (a link) in a directory or a search result group, found by
+ * the name it starts with. Within <main> when given a page.
+ */
+export function personCard(scope: Page | Locator, name: string): Locator {
+  const root = "goto" in scope ? scope.getByRole("main") : scope;
+  return root.getByRole("link", { name: new RegExp(`^${escapeRegExp(name)}(\\s|$)`) });
+}
+
 /** Find a person's profile path (with or without an account) by searching their directory. */
 export async function findPersonPath(page: Page, role: Role, name: string): Promise<string> {
   await page.goto(`/${role}s?q=${encodeURIComponent(name)}`);
-  const href = await page
-    .getByRole("main")
-    .getByRole("link", { name: new RegExp(escapeRegExp(name)) })
-    .first()
-    .getAttribute("href");
+  const href = await personCard(page, name).first().getAttribute("href");
   expect(href).toMatch(new RegExp(`^/${role}s/[0-9a-f-]{36}$`));
   return href!;
 }
@@ -345,16 +578,47 @@ export async function demoProfilePath(page: Page, key: DemoPersonKey, role?: Rol
   return findPersonPath(page, role ?? person.roles[0], person.name);
 }
 
-/** Find a property page path by searching the properties directory. */
-export async function findPropertyPath(page: Page, query: string, label: string): Promise<string> {
-  await page.goto(`/properties?q=${encodeURIComponent(query)}`);
-  const href = await page
+/** The "No account" badge next to the name on a profile page ("Án aðgangs" in Icelandic). */
+export function noAccountBadge(page: Page, text = "No account"): Locator {
+  return page
     .getByRole("main")
-    .getByRole("link", { name: new RegExp(escapeRegExp(label)) })
-    .first()
-    .getAttribute("href");
-  expect(href).toMatch(/^\/properties\/[0-9a-f-]{36}$/);
-  return href!;
+    .locator("h1 ~ span")
+    .filter({ hasText: new RegExp(`^${escapeRegExp(text)}$`) });
+}
+
+/**
+ * A person card's bottom row (directories, search), item by item: role badge,
+ * "No account" for a profile without an account, "· Also a renter" /
+ * "· Also a landlord". E.g. ["Landlord", "No account"].
+ */
+export async function cardMeta(card: Locator): Promise<string[]> {
+  return (await card.locator(":scope > div").last().locator(":scope > *").allInnerTexts()).map((t) => t.trim());
+}
+
+/**
+ * The line under a person card's name: the city, and for a landlord the
+ * property count ("Reykjavík · 2 properties", "2 properties", "No properties yet"),
+ * or null when there's none.
+ */
+export async function cardSubtitle(card: Locator): Promise<string | null> {
+  const line = card.locator(":scope > div").first().locator("p").nth(1);
+  return (await line.count()) > 0 ? (await line.innerText()).trim() : null;
+}
+
+/**
+ * The cards on a directory page (or within `scope`), in order: a person's
+ * name, or a property's street line ("Njálsgata 23, apt. 0201").
+ */
+export async function cardNames(scope: Page | Locator): Promise<string[]> {
+  const root = "goto" in scope ? scope.locator("main") : scope;
+  return root.locator("ul > li > a").evaluateAll((links) =>
+    links.map((a) => {
+      const first = a.querySelector("p");
+      // A property card's address is two block spans: street line, then place.
+      const street = first?.querySelector(":scope > span > span");
+      return (street ?? first)?.textContent?.trim() ?? "";
+    }),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -380,6 +644,11 @@ export function reviewTitleInput(page: Page): Locator {
 
 export function reviewBodyInput(page: Page): Locator {
   return page.getByLabel("Your review", { exact: true });
+}
+
+/** The review form's "Post review" button (a new review; an edit has "Update review"). */
+export function postButton(page: Page): Locator {
+  return page.getByRole("button", { name: "Post review", exact: true });
 }
 
 /**
@@ -432,7 +701,7 @@ export async function postReview(page: Page, path: string, review: Review, subje
   }
   if (subjectKennitala !== undefined) await kennitalaField.fill(subjectKennitala);
   await fillReview(page, review);
-  await page.getByRole("button", { name: "Post review" }).click();
+  await postButton(page).click();
   await expect(formStatus(page)).toHaveText("Thanks! Your review is live.");
   await expect(reviewCard(page, review.title)).toBeVisible();
 }
@@ -481,7 +750,7 @@ export async function writeReviewByKennitala(
     await page.getByRole("checkbox", { name: "I've checked that this kennitala is right" }).check();
   }
   await fillReview(page, review);
-  await page.getByRole("button", { name: "Post review" }).click();
+  await postButton(page).click();
   await expect(page).toHaveURL(new RegExp(`/${kind}s/[0-9a-f-]{36}\\?saved=1(#your-review)?$`));
   await expect(formStatus(page)).toHaveText("Thanks! Your review is live.");
   await expect(reviewCard(page, review.title)).toBeVisible();
@@ -504,39 +773,9 @@ export async function homeStat(page: Page, label: string): Promise<number> {
   return Number((await tile.locator("dd").innerText()).replace(/\D/g, ""));
 }
 
-/**
- * A person card's bottom row (directories, search), item by item: role badge,
- * "No account" for a profile without an account, "· Also a renter" /
- * "· Also a landlord". E.g. ["Landlord", "No account"].
- */
-export async function cardMeta(card: Locator): Promise<string[]> {
-  return (await card.locator(":scope > div").last().locator(":scope > *").allInnerTexts()).map((t) => t.trim());
-}
-
-/**
- * The line under a person card's name: the city, and for a landlord the
- * property count ("Reykjavík · 2 properties", "2 properties", "No properties yet"),
- * or null when there's none.
- */
-export async function cardSubtitle(card: Locator): Promise<string | null> {
-  const line = card.locator(":scope > div").first().locator("p").nth(1);
-  return (await line.count()) > 0 ? (await line.innerText()).trim() : null;
-}
-
-/**
- * The cards on a directory page (or within `scope`), in order: a person's
- * name, or a property's street line ("Njálsgata 23, apt. 0201").
- */
-export async function cardNames(scope: Page | Locator): Promise<string[]> {
-  const root = "goto" in scope ? scope.locator("main") : scope;
-  return root.locator("ul > li > a").evaluateAll((links) =>
-    links.map((a) => {
-      const first = a.querySelector("p");
-      // A property card's address is two block spans: street line, then place.
-      const street = first?.querySelector(":scope > span > span");
-      return (street ?? first)?.textContent?.trim() ?? "";
-    }),
-  );
+/** The review cards in the home page's "Latest reviews" region. */
+export function latestReviews(page: Page): Locator {
+  return page.getByRole("region", { name: "Latest reviews" }).locator("article");
 }
 
 /** A review card (article) containing `text`. */
@@ -544,35 +783,41 @@ export function reviewCard(page: Page, text: string): Locator {
   return page.locator("article").filter({ hasText: text });
 }
 
-/** Accept the next window.confirm() and click `button`. */
-export async function clickAndConfirm(page: Page, button: Locator): Promise<void> {
-  page.once("dialog", (dialog) => {
-    expect(dialog.type()).toBe("confirm");
-    void dialog.accept();
-  });
-  await button.click();
-}
-
-/** Dismiss the next window.confirm() and click `button`. */
-export async function clickAndCancel(page: Page, button: Locator): Promise<void> {
-  page.once("dialog", (dialog) => void dialog.dismiss());
-  await button.click();
+/** A review card's id (its article is `review-<uuid>`). */
+export async function reviewIdOf(card: Locator): Promise<string> {
+  const id = await card.getAttribute("id");
+  expect(id).toMatch(/^review-[0-9a-f-]{36}$/);
+  return id!.slice("review-".length);
 }
 
 // ---------------------------------------------------------------------------
-// Kennitala lookup (home page and /search)
+// Search boxes and the kennitala lookup (home page and /search)
 // ---------------------------------------------------------------------------
+
+/** The home page's big search box. */
+export function homeSearchBox(page: Page): Locator {
+  return page.getByRole("searchbox", { name: "Search landlords, renters, and properties" });
+}
+
+/** The search box on /search or in a directory's filter bar. */
+export function searchBox(page: Page): Locator {
+  return page.getByRole("search").getByRole("searchbox");
+}
 
 /** The "Look up a kennitala" section. */
 export function lookupSection(page: Page): Locator {
   return page.getByRole("region", { name: "Look up a kennitala" });
 }
 
+/** Its "Kennitala" field. */
+export function lookupField(page: Page): Locator {
+  return lookupSection(page).getByLabel("Kennitala", { exact: true });
+}
+
 /** Look a kennitala up with the form on the current page. Doesn't wait for the result. */
 export async function lookUpKennitala(page: Page, kennitala: string): Promise<void> {
-  const section = lookupSection(page);
-  await section.getByLabel("Kennitala", { exact: true }).fill(kennitala);
-  await section.getByRole("button", { name: "Look up", exact: true }).click();
+  await lookupField(page).fill(kennitala);
+  await lookupSection(page).getByRole("button", { name: "Look up", exact: true }).click();
 }
 
 // ---------------------------------------------------------------------------
@@ -600,17 +845,21 @@ export function makeProperty(overrides: Partial<NewProperty> = {}): NewProperty 
   };
 }
 
+// An apartment number ("0201", "3", "2B", "B") reads "apt. 0201"; other units as typed.
+const APARTMENT_NUMBER = /^(?:\d{1,4}\p{L}?|\p{L})$/u;
+
 /**
  * The street line the app shows for a property (its page's h1, the first line
- * of its card), in English: "Njálsgata 23, apt. 0201" for a 3–4 digit
- * apartment, "Laugavegur 5, 2nd floor left" for other units, else the address.
- * Works for makeProperty() results and DEMO.properties alike.
+ * of its card), in English: "Njálsgata 23, apt. 0201" for an apartment number
+ * (1–4 digits and an optional letter, or a letter; the form drops a "íbúð",
+ * "apt." or "#" typed before it), "Laugavegur 5, 2nd floor left" for other
+ * units, else the address. Works for makeProperty() results and DEMO.properties alike.
  */
 export function propertyLabel(property: { address: string; unit?: string | null }): string {
   const address = normalizeText(property.address);
   const unit = normalizeUnit(property.unit);
   if (!unit) return address;
-  return /^\d{3,4}$/.test(unit) ? `${address}, apt. ${unit}` : `${address}, ${unit}`;
+  return APARTMENT_NUMBER.test(unit) ? `${address}, apt. ${unit}` : `${address}, ${unit}`;
 }
 
 /** The place line under it: "101 Reykjavík". */
@@ -622,6 +871,53 @@ export function propertyPlace(property: { postalCode: string | number }): string
 /** The whole address on one line, as review cards show it: "Njálsgata 23, apt. 0201, 101 Reykjavík". */
 export function propertyAddressText(property: { address: string; unit?: string | null; postalCode: string | number }): string {
   return `${propertyLabel(property)}, ${propertyPlace(property)}`;
+}
+
+/**
+ * A property's card (a link) in a directory, a search result group or a
+ * landlord's page: street line ("Njálsgata 23, apt. 0201"), then the place
+ * ("101 Reykjavík"). Within <main> when given a page.
+ */
+export function propertyCard(
+  scope: Page | Locator,
+  property: { address: string; unit?: string | null; postalCode: string | number },
+): Locator {
+  const root = "goto" in scope ? scope.getByRole("main") : scope;
+  return root.getByRole("link", {
+    name: new RegExp(`^${escapeRegExp(propertyLabel(property))}\\s*${escapeRegExp(propertyPlace(property))}`),
+  });
+}
+
+/** Find a property page path by searching the properties directory. */
+export async function findPropertyPath(page: Page, query: string, label: string): Promise<string> {
+  await page.goto(`/properties?q=${encodeURIComponent(query)}`);
+  const href = await page
+    .getByRole("main")
+    .getByRole("link", { name: new RegExp(escapeRegExp(label)) })
+    .first()
+    .getAttribute("href");
+  expect(href).toMatch(/^\/properties\/[0-9a-f-]{36}$/);
+  return href!;
+}
+
+/** "Landlord: <name>" on a property page. */
+export function landlordLine(page: Page, name: string): Locator {
+  return page.getByRole("main").getByText(`Landlord: ${name}`, { exact: true });
+}
+
+/** The link to the landlord's page in that line. */
+export function landlordLink(page: Page, name: string): Locator {
+  return landlordLine(page, name).getByRole("link", { name, exact: true });
+}
+
+/** "Added by a renter, not confirmed" under the landlord line. */
+export function unconfirmedNote(page: Page): Locator {
+  return page.getByRole("main").getByText(UNCONFIRMED, { exact: true });
+}
+
+/** "No landlord linked" on a property page. */
+export function noLandlord(page: Page): Locator {
+  return page.getByRole("main").getByText(NO_LANDLORD, { exact: true });
 }
 
 /**
@@ -727,13 +1023,50 @@ export async function addProperty(page: Page, property: NewProperty, owner?: Pro
 
 /**
  * The property creator's "Change the landlord" / "Link the landlord" form (a
- * <details>; click its summary to open it). Fill it with fillLandlordFields,
+ * <details>; open it with openRelinkForm). Fill it with fillLandlordFields,
  * or leave the kennitala empty to remove the link, then press "Save landlord".
  */
 export function relinkForm(page: Page): Locator {
   return page.locator("details").filter({
     has: page.locator("summary", { hasText: /^(Change|Link) the landlord$/ }),
   });
+}
+
+/** Open the creator's "Change the landlord" / "Link the landlord" form. */
+export async function openRelinkForm(page: Page): Promise<Locator> {
+  const form = relinkForm(page);
+  await form.locator("summary").click();
+  await expect(landlordKennitalaInput(form)).toBeVisible();
+  return form;
+}
+
+/** Its "Save landlord" button. */
+export function saveLandlordButton(scope: Page | Locator): Locator {
+  return scope.getByRole("button", { name: "Save landlord", exact: true });
+}
+
+/**
+ * Type `kennitala` into the relink form (opening it if need be) and press
+ * "Check", then "Save landlord": both must refuse with `error` under the
+ * field, without saying who the number belongs to.
+ */
+export async function expectRelinkRefused(page: Page, kennitala: string, error: string): Promise<void> {
+  for (const button of ["Check", "Save landlord"]) {
+    const form = relinkForm(page);
+    if (!(await landlordKennitalaInput(form).isVisible())) await openRelinkForm(page);
+    await landlordKennitalaInput(form).fill(kennitala);
+    await form.getByRole("button", { name: button, exact: true }).click();
+    await expect(form.getByRole("alert"), button).toHaveText(FIX_FIELDS);
+    await expect(landlordKennitalaInput(form), button).toHaveAttribute("aria-invalid", "true");
+    await expect(landlordKennitalaInput(form), button).toHaveAccessibleDescription(
+      new RegExp(`${escapeRegExp(error)}$`),
+    );
+    // Neutral: no name, no "new landlord" fields.
+    await expect(landlordFoundAnswer(form), button).toHaveCount(0);
+    await expect(landlordNameInput(form), button).toHaveCount(0);
+    // What was typed stays, for its author only.
+    await expect(landlordKennitalaInput(form), button).toHaveValue(kennitala);
+  }
 }
 
 export function escapeRegExp(value: string): string {

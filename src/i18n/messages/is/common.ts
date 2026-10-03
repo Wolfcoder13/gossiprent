@@ -16,7 +16,7 @@ export default {
     renter: "Leigjandi",
     property: "Eign",
   },
-  /** Badge for a profile created by a review, whose person has no GossipRent account. */
+  /** Badge on a profile whose person (or company) has no GossipRent account. */
   noAccount: "Án aðgangs",
   kennitala: {
     hint: "10 tölustafir, t.d. 123456-7890",
@@ -54,7 +54,7 @@ export default {
     confirm: "Eyða þessari umsögn? Það er ekki hægt að afturkalla það.",
   },
   address: {
-    /** A unit of 3–4 digits, e.g. 0201 (2. hæð, íbúð 01). */
+    /** An apartment number, e.g. 0201 (2. hæð, íbúð 01), 3, 2B or B. */
     apartment: "{address}, íbúð {unit}",
     /** Any other unit, as typed ("2. hæð til vinstri"). */
     unit: "{address}, {unit}",

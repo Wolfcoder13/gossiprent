@@ -52,8 +52,9 @@ export function LanguageSwitch({ variant = "header" }: { variant?: "header" | "f
 
 /**
  * One line above the header for visitors who haven't picked a language and
- * whose browser doesn't prefer Icelandic. Always in English: it's for people
- * who can't read the Icelandic site yet.
+ * whose browser doesn't prefer Icelandic. In English (it's for people who
+ * can't read the Icelandic site yet), with a second button, in Icelandic, for
+ * those who can: either choice sets the language cookie, so the line goes away.
  */
 export function EnglishHint() {
   return (
@@ -65,6 +66,9 @@ export function EnglishHint() {
           className="cursor-pointer font-semibold underline underline-offset-2 hover:no-underline"
         >
           Switch to English
+        </SwitchForm>
+        <SwitchForm locale="is" className="cursor-pointer underline underline-offset-2 hover:no-underline">
+          Halda áfram á íslensku
         </SwitchForm>
       </div>
     </div>

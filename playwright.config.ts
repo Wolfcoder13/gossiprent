@@ -80,8 +80,9 @@ export default defineConfig({
       PGLITE_DATA_DIR: process.env.E2E_PGLITE_DATA_DIR,
       SEED_DEMO_DATA: "true",
       // The suite signs up dozens of accounts from one IP address. Rate limiting
-      // itself is covered by tests/unit/rate-limit.test.ts and
-      // tests/unit/server-actions.test.ts.
+      // itself is covered by tests/unit/rate-limit.test.ts and the action tests
+      // in tests/unit/accounts.test.ts, reviews.test.ts, properties.test.ts and
+      // lookup-reports.test.ts.
       AUTH_RATE_LIMIT: "off",
       // `next start` runs in production mode, where the demo data's "Gervimaður"
       // test kennitalas (010130-xxx9, 450535-2068) are refused unless allowed.

@@ -7,17 +7,23 @@ import {
   fillSignup,
   findPersonPath,
   findPropertyPath,
+  FIX_FIELDS,
   formAlert,
   formatKennitala,
   formStatus,
   freshKennitala,
+  idOf,
+  latestReviews,
   logInAs,
   makeReview,
   makeUser,
+  notYouLink,
   postReview,
   propertyLabel,
   propertyPlace,
   reviewCard,
+  reviewIdOf,
+  robotsMeta,
   setLanguage,
   signUp,
 } from "./helpers";
@@ -98,7 +104,7 @@ async function expectReportPage(
     ),
   ).toBeVisible();
   // Report pages aren't for search engines.
-  await expect(page.locator('meta[name="robots"]')).toHaveAttribute("content", /noindex/);
+  await expect(robotsMeta(page)).toHaveAttribute("content", /noindex/);
   expect(await subjectRows(page)).toEqual(rows);
   const view = subjectBox(page).getByRole("link", { name: "View the page" });
   if (viewHref) await expect(view).toHaveAttribute("href", viewHref);
@@ -111,17 +117,6 @@ async function fillReport(page: Page, report: { reason?: string; details?: strin
   if (report.reason !== undefined) await reasonSelect(page).selectOption({ label: report.reason });
   if (report.details !== undefined) await detailsInput(page).fill(report.details);
   if (report.email !== undefined) await emailInput(page).fill(report.email);
-}
-
-/** The id in a review card's `id="review-<uuid>"`. */
-async function reviewIdOf(card: Locator): Promise<string> {
-  const id = await card.getAttribute("id");
-  expect(id).toMatch(/^review-[0-9a-f-]{36}$/);
-  return id!.slice("review-".length);
-}
-
-function idOf(path: string): string {
-  return path.split("/").pop()!;
 }
 
 function reportThisPage(page: Page): Locator {
@@ -208,7 +203,7 @@ test.describe("report links", () => {
 
     // The home page's latest reviews.
     await page.goto("/");
-    const latest = page.getByRole("region", { name: "Latest reviews" }).locator("article");
+    const latest = latestReviews(page);
     await expect(latest).toHaveCount(6);
     for (const card of await latest.all()) {
       await expect(card.getByRole("link", { name: "Report", exact: true })).toHaveAttribute(
@@ -236,7 +231,7 @@ test.describe("report links", () => {
     await page.goto("/signup");
     await fillSignup(page, makeUser("renter", { kennitala: formatKennitala(DEMO.people.jon.kennitala) }));
     await expect(page.getByText("This kennitala already has an account.", { exact: true })).toBeVisible();
-    await page.getByRole("link", { name: "Not you? Report it" }).click();
+    await notYouLink(page).click();
     await expect(page).toHaveURL("/report?target=account");
     await expectReportPage(
       page,
@@ -271,7 +266,7 @@ test.describe("sending a report", () => {
     await expect(detailsInput(page)).toHaveAttribute("maxlength", "2000");
 
     await sendButton(page).click();
-    await expect(formAlert(page)).toHaveText("Please fix the highlighted fields.");
+    await expect(formAlert(page)).toHaveText(FIX_FIELDS);
     const main = page.getByRole("main");
     for (const message of ["Choose a reason.", "Describe the problem.", "Enter your email address so we can reply."]) {
       await expect(main.getByText(message, { exact: true })).toBeVisible();
@@ -523,6 +518,8 @@ test.describe("the privacy page", () => {
     await expect(main.getByText(/^GossipRent doesn't check that people enter their own kennitala/)).toBeVisible();
     await expect(main.getByText(/^You can't remove reviews others have written about you\./)).toBeVisible();
     await expect(main.getByText(/^You can close your account on My account\./)).toBeVisible();
+    // The English page names the fields as the English site labels them ("Bio").
+    await expect(main.getByText(/and your city and bio if you give them\./)).toBeVisible();
 
     // "Contact" leads to the report form for a stolen kennitala.
     await main.getByRole("link", { name: "the report form" }).click();

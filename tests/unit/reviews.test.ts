@@ -13,10 +13,15 @@ vi.mock("next/headers", async () => (await import("./support/next-mocks")).nextH
 vi.mock("next/navigation", async () => (await import("./support/next-mocks")).nextNavigationMock);
 vi.mock("next/cache", async () => (await import("./support/next-mocks")).nextCacheMock);
 // Unchanged, but replaceable once per test: lets a test make the wizard's lookup
-// see a profile that is gone by the time the review is written.
+// see a profile that is gone by the time the review is written, or make
+// deleteReview's reconcile skip a row as if another transaction held it.
 vi.mock("@/lib/people", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/people")>();
-  return { ...actual, findPersonByKennitala: vi.fn(actual.findPersonByKennitala) };
+  return {
+    ...actual,
+    findPersonByKennitala: vi.fn(actual.findPersonByKennitala),
+    reconcileProfiles: vi.fn(actual.reconcileProfiles),
+  };
 });
 
 import { eq, sql } from "drizzle-orm";
@@ -24,10 +29,17 @@ import { deleteReview, reviewWizard, saveReview, type WizardState } from "@/app/
 import { pgErrorCode } from "@/db";
 import { properties, reviews, users, type ReviewKind } from "@/db/schema";
 import { createFormat } from "@/i18n/format";
-import { getRatingSummary, getReviewByAuthor, listPeople, listReviewsAbout, listReviewsByAuthor } from "@/lib/data";
+import {
+  getRatingSummary,
+  getReviewByAuthor,
+  listPeople,
+  listRecentReviews,
+  listReviewsAbout,
+  listReviewsByAuthor,
+} from "@/lib/data";
 import { idleFormState, type FormState } from "@/lib/form-state";
 import { formatKennitala, parseKennitalaInput } from "@/lib/kennitala";
-import { findPersonByKennitala } from "@/lib/people";
+import { findPersonByKennitala, reconcileProfiles } from "@/lib/people";
 import {
   asVisitor,
   atOnce,
@@ -391,7 +403,6 @@ describe("saveReview on a profile page", () => {
     expect(await attemptsFor(keys.checks)).toBe(0);
     expect(await attemptsFor(keys.checksDaily)).toBe(0);
     expect(await attemptsFor(`kt:ip:${visitor.ip}`)).toBe(0);
-    expect(await attemptsFor(`kt:subject:${landlord.id}`)).toBe(0);
     expect(await attemptsFor(keys.newReviews)).toBe(1);
     expect(nextCacheMock.revalidatePath).toHaveBeenCalledWith(`/landlords/${landlord.id}`);
   });
@@ -446,10 +457,10 @@ describe("saveReview on a profile page", () => {
     expect(await rowsWithKennitala(nobody)).toEqual([]);
     expect(await userRow(someoneElse.id)).toMatchObject({ isLandlord: false, isRenter: true });
     expect(await userRow(landlord.id)).toMatchObject({ isLandlord: true, isRenter: false });
-    // Both mismatches count, per author and against the profile; no new review does.
+    // Both mismatches count against the author (not against the profile); no new review does.
     expect(await attemptsFor(keysOf(renter).checks)).toBe(2);
     expect(await attemptsFor(keysOf(renter).checksDaily)).toBe(2);
-    expect(await attemptsFor(`kt:subject:${landlord.id}`)).toBe(2);
+    expect(await attemptsFor(`kt:subject:${landlord.id}`)).toBe(0);
     expect(await attemptsFor(keysOf(renter).newReviews)).toBe(0);
 
     // The right number still works, and releases its own check.
@@ -524,17 +535,43 @@ describe("saveReview on a profile page", () => {
       expect(await reviewsAbout(landlord.id)).toEqual([]);
     });
 
-    it("too many wrong numbers on one profile, from anyone, stop all checks on it", async () => {
+    it("wrong numbers typed on a profile by other accounts never block anyone else's review of it", async () => {
       const landlord = await createUser({ roles: "landlord", account: false });
+      // Three accounts each type 7 wrong numbers on the page: more than any one
+      // author's 15-minute limit allows, and 21 in all.
+      for (let i = 0; i < 3; i++) {
+        const sock = await createUser({ roles: "renter" });
+        await logInAs(sock);
+        for (let guess = 0; guess < 7; guess++) {
+          expect(await review("landlord", landlord.id, { kennitala: freshKennitala() })).toMatchObject({
+            fieldErrors: { subjectKennitala: [MISMATCH] },
+          });
+        }
+      }
+      // Someone else who has the right number still posts their review.
       const renter = await createUser({ roles: "renter" });
       await logInAs(renter);
-      await seedAttempts(`kt:subject:${landlord.id}`, 20);
-      // Even the right number: the profile is being guessed at.
-      expect(await reviewPerson("landlord", landlord)).toMatchObject({ message: TRY_LATER });
-      expect(await reviewsAbout(landlord.id)).toEqual([]);
-      // Other profiles are unaffected.
+      expect(await reviewPerson("landlord", landlord)).toEqual({ status: "success", message: LIVE });
+      expect(await reviewsAbout(landlord.id)).toHaveLength(1);
+    });
+
+    it("an author who keeps typing wrong numbers is stopped by their own limit, on every profile", async () => {
+      const landlord = await createUser({ roles: "landlord", account: false });
       const other = await createUser({ roles: "landlord" });
-      expect(await reviewPerson("landlord", other)).toMatchObject({ message: LIVE });
+      const renter = await createUser({ roles: "renter" });
+      await logInAs(renter);
+      for (let guess = 0; guess < 10; guess++) {
+        expect(await review("landlord", landlord.id, { kennitala: freshKennitala() })).toMatchObject({
+          fieldErrors: { subjectKennitala: [MISMATCH] },
+        });
+      }
+      expect(await review("landlord", landlord.id, { kennitala: freshKennitala() })).toMatchObject({
+        message: TRY_LATER,
+      });
+      // Even with the right number, and on another page: the check itself is refused.
+      expect(await reviewPerson("landlord", other)).toMatchObject({ message: TRY_LATER });
+      expect(await attemptsFor(keysOf(renter).checks)).toBe(10);
+      expect(await reviewsBy(renter.id)).toEqual([]);
     });
 
     it("too many new reviews in a day: refused, but editing still works", async () => {
@@ -1269,6 +1306,22 @@ describe("deleteReview", () => {
     expect(nextCacheMock.revalidatePath).toHaveBeenCalledWith(`/landlords/${id}`);
   });
 
+  it("a profile skipped because another transaction held it is reconciled after the commit", async () => {
+    const profile = await createUser({ roles: "landlord", account: false });
+    const author = await createUser({ roles: "renter" });
+    const reviewId = await insertReview({ kind: "landlord", authorId: author.id, subjectUserId: profile.id });
+    // As if someone else held the row: reconcileProfiles leaves it alone and says so.
+    vi.mocked(reconcileProfiles).mockClear();
+    vi.mocked(reconcileProfiles).mockImplementationOnce(async (_tx, ids) =>
+      ids.filter((id): id is string => Boolean(id)),
+    );
+    await logInAs(author);
+    // Tidied up once the deletion committed, so the author still leaves the page that's gone.
+    expect(await outcome(deleteReview(form({ reviewId })))).toEqual({ redirect: "/dashboard" });
+    expect(await userRow(profile.id)).toBeNull();
+    expect(reconcileProfiles).toHaveBeenCalledTimes(1);
+  });
+
   it("a profile without an account keeps what it still has", async () => {
     const profile = await createUser({ roles: "both", account: false });
     const renter = await createUser({ roles: "renter" });
@@ -1309,6 +1362,59 @@ describe("deleteReview", () => {
     const db = await getDb();
     expect(await db.select({ id: properties.id }).from(properties).where(eq(properties.id, property.id))).toHaveLength(1);
     expect(nextCacheMock.revalidatePath).toHaveBeenCalledWith(`/properties/${property.id}`);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The newest reviews (the home page)
+// ---------------------------------------------------------------------------
+
+describe("listRecentReviews", () => {
+  it("lists every kind newest first; indexedOnly keeps only reviews whose subject's page is indexed", async () => {
+    const renter = await createUser({ roles: "renter" });
+    const landlord = await createUser({ roles: "landlord" });
+    const aboutAccount = await insertReview({
+      kind: "landlord",
+      authorId: renter.id,
+      subjectUserId: (await createUser({ roles: "landlord" })).id,
+    });
+    const aboutCompany = await insertReview({
+      kind: "landlord",
+      authorId: renter.id,
+      subjectUserId: (await createUser({ roles: "landlord", account: false, company: true })).id,
+    });
+    const property = await insertProperty({ landlordId: null, createdById: renter.id });
+    const aboutProperty = await insertReview({ kind: "property", authorId: renter.id, propertyId: property.id });
+    // Pages search engines are kept off (spec §8): a person without an account, and every renter.
+    const aboutNoAccount = await insertReview({
+      kind: "landlord",
+      authorId: renter.id,
+      subjectUserId: (await createUser({ roles: "landlord", account: false })).id,
+    });
+    const aboutRenter = await insertReview({
+      kind: "renter",
+      authorId: landlord.id,
+      subjectUserId: (await createUser({ roles: "renter" })).id,
+    });
+    const aboutRenterNoAccount = await insertReview({
+      kind: "renter",
+      authorId: landlord.id,
+      subjectUserId: (await createUser({ roles: "both", account: false })).id,
+    });
+    const mine = [aboutAccount, aboutCompany, aboutProperty, aboutNoAccount, aboutRenter, aboutRenterNoAccount];
+
+    // Other test files may add reviews to a shared database meanwhile, so look well back.
+    const all = (await listRecentReviews(1000)).map((r) => r.id).filter((id) => mine.includes(id));
+    expect(all).toEqual([...mine].reverse());
+
+    const indexed = await listRecentReviews(1000, { indexedOnly: true });
+    expect(indexed.map((r) => r.id).filter((id) => mine.includes(id))).toEqual([
+      aboutProperty,
+      aboutCompany,
+      aboutAccount,
+    ]);
+    expect(indexed.filter((r) => r.subject.kind === "renter")).toEqual([]);
+    expect(await listRecentReviews(2, { indexedOnly: true })).toHaveLength(2);
   });
 });
 
@@ -1369,16 +1475,13 @@ describe.runIf(usingPostgres)("at the same moment", () => {
     }
   }, 60_000);
 
-  it("parallel wrong guesses on one profile can't exceed its limit", async () => {
+  it("one author's parallel wrong guesses can't exceed their limit", async () => {
     const landlord = await createUser({ roles: "landlord", account: false });
-    await seedAttempts(`kt:subject:${landlord.id}`, 15);
-    const guessers = await Promise.all(Array.from({ length: 10 }, () => createUser({ roles: "renter" })));
-    const visitors = [];
-    for (const guesser of guessers) visitors.push(await logInAs(guesser));
+    const renter = await createUser({ roles: "renter" });
+    await logInAs(renter);
+    await seedAttempts(keysOf(renter).checks, 5);
     const results = await Promise.all(
-      visitors.map((visitor) =>
-        asVisitor(visitor, () => review("landlord", landlord.id, { kennitala: freshKennitala() })),
-      ),
+      Array.from({ length: 10 }, () => review("landlord", landlord.id, { kennitala: freshKennitala() })),
     );
     // Each attempt is recorded before counting, so a burst may refuse more than
     // strictly needed, but never lets more than the limit through.
@@ -1386,7 +1489,64 @@ describe.runIf(usingPostgres)("at the same moment", () => {
     const refused = results.filter((r) => r.message === TRY_LATER).length;
     expect(mismatches + refused).toBe(10);
     expect(mismatches).toBeLessThanOrEqual(5);
-    expect(await attemptsFor(`kt:subject:${landlord.id}`)).toBe(15 + mismatches);
+    expect(await attemptsFor(keysOf(renter).checks)).toBe(5 + mismatches);
     expect(await reviewsAbout(landlord.id)).toEqual([]);
+  }, 60_000);
+
+  it("two authors deleting a profile's last two reviews at once delete the profile", async () => {
+    for (let i = 0; i < 8; i++) {
+      const profile = await createUser({ roles: "landlord", account: false });
+      const a = await createUser({ roles: "renter" });
+      const b = await createUser({ roles: "renter" });
+      const first = await insertReview({ kind: "landlord", authorId: a.id, subjectUserId: profile.id });
+      const second = await insertReview({ kind: "landlord", authorId: b.id, subjectUserId: profile.id });
+      const asA = await logInAs(a);
+      const asB = await logInAs(b);
+      const results = await atOnce(
+        () => asVisitor(asA, () => outcome(deleteReview(form({ reviewId: first })))),
+        () => asVisitor(asB, () => outcome(deleteReview(form({ reviewId: second })))),
+        i,
+      );
+      const detail = `run ${i}: ${JSON.stringify(results)}`;
+      expect(await userRow(profile.id), detail).toBeNull();
+      // Whoever saw the page go is sent to their dashboard; nobody is left on a page that's gone.
+      for (const result of results) expect([undefined, { redirect: "/dashboard" }], detail).toContainEqual(result);
+      expect(results, detail).toContainEqual({ redirect: "/dashboard" });
+    }
+  }, 60_000);
+
+  it("a profile skipped because another transaction held it is tidied up once that one commits", async () => {
+    // Another transaction deletes the profile's other review and holds its row
+    // without deleting it, as a reconciler that still saw this review would.
+    const profile = await createUser({ roles: "landlord", account: false });
+    const a = await createUser({ roles: "renter" });
+    const b = await createUser({ roles: "renter" });
+    const mine = await insertReview({ kind: "landlord", authorId: a.id, subjectUserId: profile.id });
+    const theirs = await insertReview({ kind: "landlord", authorId: b.id, subjectUserId: profile.id });
+    const db = await getDb();
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let holding!: () => void;
+    const held = new Promise<void>((resolve) => (holding = resolve));
+    const other = db.transaction(async (tx) => {
+      await tx.delete(reviews).where(eq(reviews.id, theirs));
+      await tx.select({ id: users.id }).from(users).where(eq(users.id, profile.id)).for("update");
+      holding();
+      await released;
+    });
+    await held;
+
+    await logInAs(a);
+    const deleting = outcome(deleteReview(form({ reviewId: mine })));
+    // Its own transaction commits (the review is gone) while the profile is still held.
+    await vi.waitFor(async () => expect(await db.select().from(reviews).where(eq(reviews.id, mine))).toEqual([]), {
+      timeout: 10_000,
+    });
+    expect(await userRow(profile.id)).not.toBeNull();
+    release();
+    await other;
+
+    expect(await deleting).toEqual({ redirect: "/dashboard" });
+    expect(await userRow(profile.id)).toBeNull();
   }, 60_000);
 });

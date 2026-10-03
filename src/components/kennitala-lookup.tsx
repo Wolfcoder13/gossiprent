@@ -17,7 +17,21 @@ import { KENNITALA_LOOKUP_FORM_ID } from "./kennitala-query";
  * action asks visitors who aren't logged in to log in. Only one per page
  * (the search box finds it by id).
  */
-export function KennitalaLookup({ loggedIn }: { loggedIn: boolean }) {
+export function KennitalaLookup({
+  loggedIn,
+  autoFocus = false,
+  describedBy,
+}: {
+  loggedIn: boolean;
+  /**
+   * Focus the field when the page loads: on /search?kt=1, where a kennitala
+   * typed into a search box sends the visitor. A native `autofocus` in the
+   * server's HTML, so it also works without JavaScript.
+   */
+  autoFocus?: boolean;
+  /** The id of text that says why the visitor is here (read with the field). */
+  describedBy?: string;
+}) {
   const t = useT();
   const pathname = usePathname();
   const [state, formAction] = useActionState(lookupKennitala, idleFormState);
@@ -49,6 +63,8 @@ export function KennitalaLookup({ loggedIn }: { loggedIn: boolean }) {
               required
               defaultValue={state.values?.kennitala}
               error={state.fieldErrors?.kennitala}
+              autoFocus={autoFocus}
+              describedBy={describedBy}
             />
           </div>
           <SubmitButton pendingLabel={t("lookup.pending")} className="sm:mt-7">

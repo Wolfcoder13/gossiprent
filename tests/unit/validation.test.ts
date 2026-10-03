@@ -75,6 +75,8 @@ describe("kennitalaField", () => {
     ["with a space", "120385 1209"],
     ["padded", "  120385-1209  "],
     ["with spaces and a dash", "120385 - 1209"],
+    ["with an en dash", "120385–1209"],
+    ["with an em dash (iOS turns -- into one)", "120385—1209"],
     ["with a prefix (aggressive cleanup)", "kt. 120385-1209"],
   ])("reads a kennitala typed %s as its 10 digits", (_label, input) => {
     expect(parsed(schema, { kennitala: input }).kennitala).toBe(PERSON_KT);
@@ -133,11 +135,31 @@ describe("freeText", () => {
     expect(schema.parse("  Jón\n\nsays hi  ")).toBe("Jón\n\nsays hi");
   });
 
+  it("stores a browser's CRLF line breaks as \\n, and counts each as one character", () => {
+    expect(schema.parse("Fyrsta lína\r\nÖnnur lína\r\n")).toBe("Fyrsta lína\nÖnnur lína");
+    // 49 characters in the textarea (its maxLength counts a line break once), 50 as sent with CRLF.
+    expect(schema.parse(`${"x".repeat(24)}\r\n${"y".repeat(24)}`)).toHaveLength(49);
+    expect(schema.parse(`${"x".repeat(25)}\r\n${"y".repeat(24)}`)).toHaveLength(50);
+  });
+
+  it("never stores control characters (terminal escape sequences), but keeps tabs", () => {
+    expect(schema.parse("Halló\u001b[2J\u001b[3J\u001b[H\theimur\u0007")).toBe("Halló[2J[3J[H\theimur");
+    expect(schema.parse("a\u0000b\u0008c\u007fd\u009be")).toBe("abcde");
+  });
+
   it.each([
     ["with a hyphen", "My kt is 120385-1209, call me"],
     ["with a space", "kt 120385 1209"],
     ["without a separator", "(1203851209)"],
     ["of a company", "Félagið 451089-1209 á húsið"],
+    ["with a spaced hyphen", "Leigusalinn (kt. 120385 - 1209) var seinn"],
+    ["with a hyphen after a space", "kt. 120385 -1209"],
+    ["with two spaces", "kt. 120385  1209"],
+    ["with an en dash", "kt. 120385–1209"],
+    ["with a spaced en dash", "kt. 120385 – 1209"],
+    ["across a CRLF line break", "kt. 120385-\r\n1209"],
+    ["split by a control character", "kt. 120385\u001b1209"],
+    ["split by a soft hyphen", "kt. 120385­1209"],
   ])("rejects text containing a kennitala %s", (_label, text) => {
     const result = schema.safeParse(text);
     expect(result.success).toBe(false);
@@ -449,6 +471,16 @@ describe("reviewSchema", () => {
     });
   });
 
+  it.each(["120385 - 1209", "120385 -1209", "120385  1209", "120385–1209", "120385 – 1209"])(
+    "rejects a body with a kennitala written %j",
+    (kennitala) => {
+      const body = `Leigusalinn (kt. ${kennitala}) skilaði tryggingunni seint og svaraði aldrei.`;
+      expect(errors(reviewSchema, { ...valid, body }).body).toEqual([
+        "Don't include a kennitala here. ID numbers are never shown on GossipRent.",
+      ]);
+    },
+  );
+
   it("requires the subject id to be a UUID and the kind to be known", () => {
     expect(errors(reviewSchema, { ...valid, subjectId: "123" }).subjectId).toEqual(["That review target doesn't exist."]);
     expect(errors(reviewSchema, { ...valid, kind: "admin" }).kind).toEqual(["Check this field."]);
@@ -539,18 +571,27 @@ describe("propertySchema", () => {
     });
   });
 
-  it("normalizes the address and drops a leading “íbúð”, “apt” or “#” from the unit", () => {
+  it("normalizes the address and drops a leading “íbúð”, “apt” or “#” from the unit (normalizeUnit)", () => {
     for (const [unit, expected] of [
       ["íbúð 0201", "0201"],
       ["Íbúð 0201", "0201"],
+      ["íbúð-0201", "0201"],
+      ["íbúð:0201", "0201"],
       ["íb. 3", "3"],
       ["apt. 2B", "2B"],
+      ["apt.B", "B"],
       ["Unit 5", "5"],
+      ["unit: 5", "5"],
       ["#4", "4"],
+      ["#B", "B"],
+      ["  íbúð   0201 ", "0201"],
       ["2. hæð til vinstri", "2. hæð til vinstri"],
       ["Unitas", "Unitas"],
+      ["íbúðin 2", "íbúðin 2"],
       ["íbúð", null],
+      ["íbúð:", null],
       ["  ", null],
+      ["\u001b", null],
     ] as const) {
       expect(saved({ ...valid, unit }).unit, unit).toBe(expected);
     }
@@ -634,6 +675,12 @@ describe("reportSchema", () => {
       "Must be 2,000 characters or fewer.",
     ]);
     expect(errors(reportSchema, { ...valid, target: "user" }).target).toEqual(["That page can't be reported."]);
+  });
+
+  it("keeps the details' line breaks (as \\n) but no other control characters", () => {
+    const details = "Fyrsta lína\r\n\u001b[2J\u001b]52;c;ZWNobw==\u0007Önnur\rlína\u001b[8m  ";
+    expect(parsed(reportSchema, { ...valid, details }).details).toBe("Fyrsta lína\n[2J]52;c;ZWNobw==Önnur\nlína[8m");
+    expect(errors(reportSchema, { ...valid, details: "\u001b\u0007 \r\n" }).details).toEqual(["Describe the problem."]);
   });
 
   it("lets the details name a kennitala (to say whose identity was claimed)", () => {

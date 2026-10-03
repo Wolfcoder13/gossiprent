@@ -53,10 +53,14 @@ export default {
       cta: "Finna leigjanda",
     },
   },
+  /**
+   * The newest reviews of properties and of landlords. Reviews of renters (and of
+   * people without an account) are only on their own pages, which aren't indexed.
+   */
   latest: {
     heading: "Nýjustu umsagnir",
     emptyTitle: "Engar umsagnir enn",
-    emptyBody: "Þegar fólk fer að skrifa umsagnir um leigusala, leigjendur og eignir birtast þær nýjustu hér.",
+    emptyBody: "Þegar fólk fer að skrifa umsagnir um leigusala og eignir birtast þær nýjustu hér.",
     /** Button to /signup in the empty state, for visitors who aren't logged in. */
     emptyAction: "Nýskráning: skrifaðu fyrstu umsögnina",
   },

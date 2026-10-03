@@ -4,22 +4,24 @@
  * profiles without an account. The races at the end only really race on a
  * real Postgres (UNIT_DATABASE_URL; see support/harness.ts).
  */
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import type { Transaction } from "@/db";
-import { properties, reviews, users } from "@/db/schema";
+import { properties, propertyDisclaimers, reviews, sessions, users } from "@/db/schema";
 import {
+  detachAccount,
   ensurePerson,
   findPersonByKennitala,
   getOwnKennitala,
   grantRoleById,
   grantRoleByKennitala,
+  hasReviewedProperty,
+  isDisclaimedLandlord,
   isNameLocked,
   isStillReferenced,
-  nameLockedSql,
-  personNameKeys,
   propertyAddressKeys,
   reconcileProfiles,
+  reconcileSkipped,
 } from "@/lib/people";
 import { icelandicSortKey } from "@/lib/text";
 import {
@@ -271,48 +273,6 @@ describe("isNameLocked", () => {
   });
 });
 
-describe("nameLockedSql", () => {
-  /** Signup's single statement: take over a profile without an account, keeping a locked name. */
-  async function claim(kennitala: string, typedName: string) {
-    const db = await getDb();
-    const keys = personNameKeys(typedName);
-    const [row] = await db
-      .insert(users)
-      .values({ kennitala, ...keys, isRenter: true, email: `claim-${unique()}@example.com`, passwordHash: "x", joinedAt: new Date() })
-      .onConflictDoUpdate({
-        target: users.kennitala,
-        set: {
-          email: sql`excluded.email`,
-          passwordHash: sql`excluded.password_hash`,
-          joinedAt: sql`excluded.joined_at`,
-          name: sql`case when ${nameLockedSql()} then ${users.name} else excluded.name end`,
-        },
-        setWhere: isNull(users.email),
-      })
-      .returning({ name: users.name });
-    return row?.name ?? null;
-  }
-
-  it("keeps the reviewed name in a signup-style upsert, and takes the typed one otherwise", async () => {
-    const author = await createUser({ roles: "landlord" });
-    const reviewed = await createUser({ roles: "renter", account: false, name: "Nafn Úr Umsögn" });
-    await insertReview({ kind: "renter", authorId: author.id, subjectUserId: reviewed.id });
-    expect(await claim(reviewed.kennitala, "Nafn Sem Ég Vel")).toBe("Nafn Úr Umsögn");
-
-    const linkedOnly = await createUser({ roles: "landlord", account: false, name: "Gamalt Nafn" });
-    await insertProperty({ landlordId: linkedOnly.id, createdById: author.id });
-    expect(await claim(linkedOnly.kennitala, "Nýtt Nafn")).toBe("Gamalt Nafn");
-
-    // Not yet described by anyone else (e.g. a profile whose reviews were all deleted).
-    const free = await createUser({ roles: "renter", account: false, name: "Gamalt Nafn" });
-    expect(await claim(free.kennitala, "Nýtt Nafn")).toBe("Nýtt Nafn");
-
-    // An account is never taken over.
-    const account = await createUser({ roles: "renter" });
-    expect(await claim(account.kennitala, "Annað Nafn")).toBeNull();
-  });
-});
-
 describe("reconcileProfiles", () => {
   it("deletes a profile without an account that nothing refers to any more", async () => {
     const profile = await createUser({ roles: "landlord", account: false });
@@ -364,7 +324,15 @@ describe("reconcileProfiles", () => {
       reconcileProfiles(tx, [null, undefined, profile.id, profile.id, "00000000-0000-0000-0000-000000000000"]),
     );
     expect(await userRow(profile.id)).toBeNull();
-    await expect(inTransaction((tx) => reconcileProfiles(tx, []))).resolves.toBeUndefined();
+    await expect(inTransaction((tx) => reconcileProfiles(tx, []))).resolves.toEqual([]);
+  });
+
+  it("returns no skipped ids when it could lock every profile (and never lists accounts)", async () => {
+    const profile = await createUser({ roles: "renter", account: false });
+    const author = await createUser({ roles: "landlord" });
+    await insertReview({ kind: "renter", authorId: author.id, subjectUserId: profile.id });
+    const account = await createUser({ roles: "renter" });
+    expect(await inTransaction((tx) => reconcileProfiles(tx, [profile.id, account.id]))).toEqual([]);
   });
 
   it("keeps a profile that something else still refers to, without breaking the caller's transaction", async () => {
@@ -377,6 +345,159 @@ describe("reconcileProfiles", () => {
       await reconcileProfiles(tx, [profile.id]);
       expect(await tx.select({ id: users.id }).from(users).where(eq(users.id, profile.id))).toHaveLength(1);
     });
+    expect(await userRow(profile.id)).not.toBeNull();
+  });
+});
+
+describe("reconcileSkipped", () => {
+  it("reconciles the profiles it is given, in a transaction of its own", async () => {
+    const author = await createUser({ roles: "landlord" });
+    const unreferenced = await createUser({ roles: "landlord", account: false });
+    const reviewed = await createUser({ roles: "both", account: false });
+    await insertReview({ kind: "renter", authorId: author.id, subjectUserId: reviewed.id });
+    const account = await createUser({ roles: "both" });
+
+    await reconcileSkipped([unreferenced.id, reviewed.id, reviewed.id, account.id]);
+
+    expect(await userRow(unreferenced.id)).toBeNull();
+    expect(await userRow(reviewed.id)).toMatchObject({ isLandlord: false, isRenter: true });
+    expect(await userRow(account.id)).toMatchObject({ isLandlord: true, isRenter: true, email: account.email });
+  });
+
+  it("does nothing for no ids, and accepts a database to use", async () => {
+    await expect(reconcileSkipped([])).resolves.toBeUndefined();
+    const profile = await createUser({ roles: "renter", account: false });
+    await reconcileSkipped([profile.id], await getDb());
+    expect(await userRow(profile.id)).toBeNull();
+  });
+});
+
+describe("hasReviewedProperty", () => {
+  it("is true only for the holder of the kennitala who reviewed that property", async () => {
+    const renter = await createUser({ roles: "both" });
+    const other = await createUser({ roles: "renter" });
+    const property = await insertProperty({ landlordId: null, createdById: other.id });
+    const elsewhere = await insertProperty({ landlordId: null, createdById: other.id });
+    await insertReview({ kind: "property", authorId: renter.id, propertyId: property.id });
+
+    expect(await hasReviewedProperty(await getDb(), renter.kennitala, property.id)).toBe(true);
+    expect(await hasReviewedProperty(await getDb(), renter.kennitala, elsewhere.id)).toBe(false);
+    expect(await hasReviewedProperty(await getDb(), other.kennitala, property.id)).toBe(false);
+    expect(await hasReviewedProperty(await getDb(), freshKennitala(), property.id)).toBe(false);
+  });
+
+  it("doesn't count reviews about the person, and works inside a transaction", async () => {
+    const landlord = await createUser({ roles: "both" });
+    const renter = await createUser({ roles: "renter" });
+    const property = await insertProperty({ landlordId: landlord.id, createdById: renter.id });
+    await insertReview({ kind: "landlord", authorId: renter.id, subjectUserId: landlord.id });
+    await inRolledBackTransaction(async (tx) => {
+      expect(await hasReviewedProperty(tx, landlord.kennitala, property.id)).toBe(false);
+    });
+  });
+});
+
+describe("isDisclaimedLandlord", () => {
+  it("is true only for the person who disclaimed that property", async () => {
+    const landlord = await createUser({ roles: "landlord" });
+    const other = await createUser({ roles: "landlord" });
+    const renter = await createUser({ roles: "renter" });
+    const property = await insertProperty({ landlordId: null, createdById: renter.id });
+    const elsewhere = await insertProperty({ landlordId: null, createdById: renter.id });
+    const db = await getDb();
+    await db.insert(propertyDisclaimers).values({ propertyId: property.id, userId: landlord.id });
+
+    expect(await isDisclaimedLandlord(db, landlord.kennitala, property.id)).toBe(true);
+    expect(await isDisclaimedLandlord(db, landlord.kennitala, elsewhere.id)).toBe(false);
+    expect(await isDisclaimedLandlord(db, other.kennitala, property.id)).toBe(false);
+    expect(await isDisclaimedLandlord(db, freshKennitala(), property.id)).toBe(false);
+    await inRolledBackTransaction(async (tx) => {
+      expect(await isDisclaimedLandlord(tx, landlord.kennitala, property.id)).toBe(true);
+    });
+  });
+});
+
+describe("detachAccount", () => {
+  async function sessionCount(userId: string): Promise<number> {
+    const db = await getDb();
+    return (await db.select().from(sessions).where(eq(sessions.userId, userId))).length;
+  }
+
+  async function addSession(userId: string): Promise<void> {
+    const db = await getDb();
+    await db.insert(sessions).values({ id: `s-${unique()}`, userId, expiresAt: new Date(Date.now() + 60_000) });
+  }
+
+  it("deletes an account nothing refers to, with its sessions", async () => {
+    const account = await createUser({ roles: "both" });
+    await addSession(account.id);
+    expect(await inTransaction((tx) => detachAccount(tx, account.id))).toBe("deleted");
+    expect(await userRow(account.id)).toBeNull();
+    expect(await sessionCount(account.id)).toBe(0);
+  });
+
+  it("keeps a reviewed account as a profile without one, with the roles it was reviewed in", async () => {
+    const landlord = await createUser({ roles: "landlord" });
+    const account = await createUser({ roles: "both", city: "Akureyri" });
+    const reviewId = await insertReview({ kind: "renter", authorId: landlord.id, subjectUserId: account.id });
+    await addSession(account.id);
+
+    expect(await inTransaction((tx) => detachAccount(tx, account.id))).toBe("kept");
+    expect(await userRow(account.id)).toMatchObject({
+      email: null,
+      passwordHash: null,
+      joinedAt: null,
+      city: null,
+      bio: null,
+      isLandlord: false,
+      isRenter: true,
+      name: account.name,
+      kennitala: account.kennitala,
+    });
+    expect(await sessionCount(account.id)).toBe(0);
+    const db = await getDb();
+    expect(await db.select().from(reviews).where(eq(reviews.id, reviewId))).toHaveLength(1);
+  });
+
+  it("keeps a property's landlord as its landlord", async () => {
+    const renter = await createUser({ roles: "renter" });
+    const account = await createUser({ roles: "both" });
+    const property = await insertProperty({ landlordId: account.id, createdById: renter.id });
+    expect(await inTransaction((tx) => detachAccount(tx, account.id))).toBe("kept");
+    expect(await userRow(account.id)).toMatchObject({ isLandlord: true, isRenter: false, email: null });
+    const db = await getDb();
+    const [row] = await db.select().from(properties).where(eq(properties.id, property.id));
+    expect(row.landlordId).toBe(account.id);
+  });
+
+  it("keeps an account that only wrote reviews, roles as they were, and its reviews", async () => {
+    const landlord = await createUser({ roles: "landlord" });
+    const account = await createUser({ roles: "renter" });
+    const reviewId = await insertReview({ kind: "landlord", authorId: account.id, subjectUserId: landlord.id });
+    expect(await inTransaction((tx) => detachAccount(tx, account.id))).toBe("kept");
+    expect(await userRow(account.id)).toMatchObject({ isLandlord: false, isRenter: true, email: null });
+    const db = await getDb();
+    expect(await db.select().from(reviews).where(eq(reviews.id, reviewId))).toHaveLength(1);
+  });
+
+  it("keeps the row, without breaking the transaction, when something it can't see refers to it", async () => {
+    const account = await createUser({ roles: "landlord" });
+    const pin = `detach_pin_${unique()}`;
+    await inRolledBackTransaction(async (tx) => {
+      await tx.execute(sql.raw(`create table ${pin} (user_id uuid not null references users (id))`));
+      await tx.execute(sql.raw(`insert into ${pin} values ('${account.id}')`));
+      expect(await detachAccount(tx, account.id)).toBe("kept");
+      const [row] = await tx.select().from(users).where(eq(users.id, account.id));
+      expect(row).toMatchObject({ email: null, passwordHash: null, isLandlord: true });
+    });
+  });
+
+  it("refuses a profile without an account, or an unknown id, changing nothing", async () => {
+    const profile = await createUser({ roles: "renter", account: false });
+    await expect(inTransaction((tx) => detachAccount(tx, profile.id))).rejects.toThrow(/not an account/);
+    await expect(
+      inTransaction((tx) => detachAccount(tx, "00000000-0000-0000-0000-000000000000")),
+    ).rejects.toThrow(/not an account/);
     expect(await userRow(profile.id)).not.toBeNull();
   });
 });
@@ -410,12 +531,14 @@ describe("database errors", () => {
         () => ensurePerson(tx, { kennitala, name: "Ný manneskja", isCompany: false, role: "renter" }),
         () => grantRoleByKennitala(tx, kennitala, "renter"),
         () => grantRoleById(tx, person.id, kennitala, "renter"),
+        () => hasReviewedProperty(tx, kennitala, person.id),
+        () => isDisclaimedLandlord(tx, kennitala, person.id),
       ]) {
         failures.push(await call().then(() => "no error", (error: unknown) => error));
       }
     });
 
-    expect(failures).toHaveLength(4);
+    expect(failures).toHaveLength(6);
     for (const error of failures) {
       expect(error).toBeInstanceOf(Error);
       const { message, stack, cause } = error as Error;
@@ -467,10 +590,14 @@ describe("at the same moment", () => {
       });
 
       await locked.promise;
-      // Doesn't wait for the lock, and doesn't delete the row.
-      await inTransaction((tx) => reconcileProfiles(tx, [profile.id]));
+      // Doesn't wait for the lock, and doesn't delete the row: it reports it as skipped.
+      const skipped = await inTransaction((tx) => reconcileProfiles(tx, [profile.id]));
+      expect(skipped).toEqual([profile.id]);
+      // The retry after commit waits for the review to land, then keeps the profile.
+      const retrying = reconcileSkipped(skipped);
+      await sleep(100);
       release.resolve();
-      await reviewing;
+      await Promise.all([reviewing, retrying]);
 
       expect(await userRow(profile.id)).toMatchObject({ isLandlord: true });
       const db = await getDb();
@@ -480,6 +607,42 @@ describe("at the same moment", () => {
           .from(reviews)
           .where(and(eq(reviews.subjectUserId, profile.id), eq(reviews.authorId, author.id))),
       ).toHaveLength(1);
+    });
+
+    it("two people deleting a profile's last two reviews at once: the one that skipped it removes it after committing", async () => {
+      const first = await createUser({ roles: "renter" });
+      const second = await createUser({ roles: "renter" });
+      const profile = await createUser({ roles: "landlord", account: false });
+      const r1 = await insertReview({ kind: "landlord", authorId: first.id, subjectUserId: profile.id });
+      const r2 = await insertReview({ kind: "landlord", authorId: second.id, subjectUserId: profile.id });
+      const locked = deferred();
+      const commit = deferred();
+
+      // The first deleter locks the profile and still sees r2 (not yet deleted), so keeps it.
+      const firstDelete = inTransaction(async (tx) => {
+        await tx.delete(reviews).where(eq(reviews.id, r1));
+        const skipped = await reconcileProfiles(tx, [profile.id]);
+        locked.resolve();
+        await commit.promise;
+        return skipped;
+      });
+      await locked.promise;
+
+      // The second deleter can't lock it, so it skips it and says so.
+      const skipped = await inTransaction(async (tx) => {
+        await tx.delete(reviews).where(eq(reviews.id, r2));
+        return reconcileProfiles(tx, [profile.id]);
+      });
+      expect(skipped).toEqual([profile.id]);
+
+      // Its retry waits for the first to commit, then finds nothing left.
+      const retrying = reconcileSkipped(skipped);
+      await sleep(100);
+      expect(await userRow(profile.id)).not.toBeNull();
+      commit.resolve();
+      expect(await firstDelete).toEqual([]);
+      await retrying;
+      expect(await userRow(profile.id)).toBeNull();
     });
 
     it("ensurePerson creates the profile again if reconcileProfiles deletes it in between", async () => {

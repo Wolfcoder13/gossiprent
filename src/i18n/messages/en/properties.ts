@@ -116,5 +116,8 @@ export default {
     relinkNotCreator: "You can only change the landlord of a property you added.",
     relinkHasAccount:
       "The landlord has a GossipRent account, so only they can remove the link (with “Not my property”). If it's wrong, report this page.",
+    relinkReviewed: "This person has reviewed this property, so they can't be its landlord.",
+    relinkDisclaimed:
+      "This person has said this isn't their property, so you can't link them to it. Only they can link it again, with “I manage this property”.",
   },
 } satisfies Shape<typeof is>;

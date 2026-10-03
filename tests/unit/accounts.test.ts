@@ -12,6 +12,12 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("next/headers", async () => (await import("./support/next-mocks")).nextHeadersMock);
 vi.mock("next/navigation", async () => (await import("./support/next-mocks")).nextNavigationMock);
 vi.mock("next/cache", async () => (await import("./support/next-mocks")).nextCacheMock);
+// The real password functions, with verifyPassword wrapped so a test can run
+// something in the middle of a login (see "…before the password changed…").
+vi.mock("@/lib/auth/password", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/auth/password")>();
+  return { ...actual, verifyPassword: vi.fn(actual.verifyPassword) };
+});
 import { eq, like } from "drizzle-orm";
 import {
   changePassword,
@@ -21,7 +27,7 @@ import {
   updateProfile,
 } from "@/app/actions/account";
 import { login, signup } from "@/app/actions/auth";
-import { authAttempts, properties, reviews, sessions, users, type UserRole } from "@/db/schema";
+import { authAttempts, properties, propertyDisclaimers, reviews, sessions, users, type UserRole } from "@/db/schema";
 import { getCurrentUser } from "@/lib/auth/current-user";
 import { verifyPassword } from "@/lib/auth/password";
 import { SESSION_COOKIE } from "@/lib/auth/session";
@@ -428,6 +434,20 @@ describe("signup takes over a profile without an account", () => {
     expect(await flags(profile.id)).toEqual({ isLandlord: false, isRenter: true });
   });
 
+  it("signs out any session left on the profile's row, so it can't come back to life as the new account", async () => {
+    const profile = await createUser({ roles: "renter", account: false });
+    // A session row on a profile without an account (e.g. from a login that raced a reset).
+    const leftOver = await logInAs(profile);
+    expect(await getCurrentUser()).toBeNull();
+
+    newVisitor();
+    expect(await trySignup({ kennitala: profile.kennitala })).toMatchObject({ redirect: expect.any(String) });
+    expect(await getCurrentUser()).toMatchObject({ id: profile.id });
+    // Only the new session remains, and the old cookie stays signed out.
+    expect(await sessionCount(profile.id)).toBe(1);
+    expect(await asVisitor(leftOver, () => getCurrentUser())).toBeNull();
+  });
+
   it("a second sign-up with the same kennitala is refused once the profile is taken", async () => {
     const profile = await createUser({ roles: "landlord", account: false });
     expect(await trySignup({ kennitala: profile.kennitala })).toMatchObject({ redirect: expect.any(String) });
@@ -464,6 +484,80 @@ describe("signup takes over a profile without an account", () => {
         const db = await getDb();
         const [review] = await db.select().from(reviews).where(eq(reviews.id, reviewId));
         expect(review.subjectUserId, detail).toBe(row!.id);
+      }
+    },
+    60_000,
+  );
+
+  it.skipIf(!usingPostgres)(
+    "a review committed while signup waits for it locks the name (new person, or a profile nobody described yet)",
+    async () => {
+      for (const existing of [false, true]) {
+        const author = await createUser({ roles: "renter" });
+        const kennitala = freshKennitala();
+        // A profile whose name isn't locked yet (e.g. all its reviews were deleted).
+        if (existing) await createUser({ roles: "renter", account: false, kennitala, name: "Gamalt Nafn" });
+        const db = await getDb();
+        let started!: () => void;
+        const isStarted = new Promise<void>((resolve) => (started = resolve));
+        let release!: () => void;
+        const released = new Promise<void>((resolve) => (release = resolve));
+        // The review: role grant first (creating or locking the row), the review itself later.
+        const reviewing = db.transaction(async (tx) => {
+          const { id } = await ensurePerson(tx, { kennitala, name: "Nafn Úr Umsögn", isCompany: false, role: "landlord" });
+          started();
+          await released;
+          await tx.insert(reviews).values({
+            kind: "landlord",
+            authorId: author.id,
+            subjectUserId: id,
+            rating: 3,
+            title: `Title ${unique()}`,
+            body: "A review body that is long enough to be valid.",
+          });
+        });
+        await isStarted;
+
+        const visitor = newVisitor();
+        const signingUp = asVisitor(visitor, () => trySignup({ kennitala, name: letterName("Sjálf"), isRenter: "on" }));
+        // Long enough for signup to hash the password and reach the row the review holds.
+        await pause(1500);
+        release();
+        await reviewing;
+        const detail = `existing profile: ${existing}`;
+        expect(await signingUp, detail).toEqual({ redirect: "/dashboard?name=kept" });
+        expect(await rowByKennitala(kennitala), detail).toMatchObject({
+          name: existing ? "Gamalt Nafn" : "Nafn Úr Umsögn",
+          isLandlord: true,
+          isRenter: true,
+        });
+      }
+    },
+    30_000,
+  );
+
+  it.skipIf(!usingPostgres)(
+    "a review or property link about the kennitala at the same moment keeps the name they gave, if it came first",
+    async () => {
+      for (let i = 0; i < 12; i++) {
+        const author = await createUser({ roles: "renter" });
+        const kennitala = freshKennitala();
+        const byReview = i % 4 < 2;
+        const visitor = newVisitor();
+        const typed = letterName("Sjálf");
+        const [signedUp] = await atOnce(
+          () => asVisitor(visitor, () => trySignup({ kennitala, name: typed, isRenter: "on" })),
+          () => (byReview ? reviewByKennitala(author.id, kennitala, "landlord") : linkByKennitala(author.id, kennitala)),
+          i,
+        );
+        const row = (await rowByKennitala(kennitala))!;
+        const detail = `run ${i} (${byReview ? "review" : "link"}): signup → ${JSON.stringify(signedUp)}`;
+        // Signup creates a row with created_at = joined_at; one the other side created is older.
+        const otherCameFirst = row.createdAt.getTime() < row.joinedAt!.getTime();
+        const theirName = byReview ? "Nafn Úr Umsögn" : "Leigusali Úr Skráningu";
+        expect(row.name, detail).toBe(otherCameFirst ? theirName : typed);
+        expect(signedUp, detail).toEqual({ redirect: otherCameFirst ? "/dashboard?name=kept" : "/dashboard" });
+        expect(row, detail).toMatchObject({ isLandlord: true, isRenter: true, passwordHash: expect.any(String) });
       }
     },
     60_000,
@@ -571,6 +665,48 @@ describe("login", () => {
     expect(result).toEqual({ status: "error", message: NO_MATCH, values: { email: user.email } });
     expect(currentVisitor().cookies.get(SESSION_COOKIE)).toBeUndefined();
   });
+
+  it("a login whose password check passed before the password changed gets no session", async () => {
+    const user = await createUser({ roles: "renter" });
+    const db = await getDb();
+    // The password is changed (or the account closed or reset) while the check is running.
+    const actual = await vi.importActual<typeof import("@/lib/auth/password")>("@/lib/auth/password");
+    vi.mocked(verifyPassword).mockImplementationOnce(async (password, hash) => {
+      const ok = await actual.verifyPassword(password, hash);
+      await db.update(users).set({ passwordHash: "scrypt$changed" }).where(eq(users.id, user.id));
+      return ok;
+    });
+    const result = await tryLogin(user.email!, user.password!);
+    expect(result).toEqual({ status: "error", message: NO_MATCH, values: { email: user.email } });
+    expect(currentVisitor().cookies.get(SESSION_COOKIE)).toBeUndefined();
+    expect(await sessionCount(user.id)).toBe(0);
+    // It still counts as a failed attempt.
+    expect(await attemptsFor(accountKey(user.email!))).toBe(1);
+  });
+
+  it.skipIf(!usingPostgres)(
+    "logging in while the account is being closed never leaves a session behind",
+    async () => {
+      for (let i = 0; i < 8; i++) {
+        const user = await createUser({ roles: "renter" });
+        const landlord = await createUser({ roles: "landlord" });
+        // Reviewed, so closing keeps the row (and a left-over session would have somewhere to live).
+        await insertReview({ kind: "renter", authorId: landlord.id, subjectUserId: user.id });
+        const closing = await logInAs(user);
+        const loggingIn = newVisitor();
+        const [loggedIn] = await atOnce(
+          () => asVisitor(loggingIn, () => tryLogin(user.email!, user.password!)),
+          () => asVisitor(closing, () => closeAccount()),
+          i,
+        );
+        const detail = `run ${i}: login → ${JSON.stringify(loggedIn)}`;
+        expect(await userRow(user.id), detail).toMatchObject({ passwordHash: null });
+        expect(await sessionCount(user.id), detail).toBe(0);
+        expect(await asVisitor(loggingIn, () => getCurrentUser()), detail).toBeNull();
+      }
+    },
+    60_000,
+  );
 
   it("validates the fields", async () => {
     expect(await tryLogin("not-an-email", "")).toMatchObject({
@@ -1273,6 +1409,46 @@ describe("changeRole", () => {
     ]);
   });
 
+  it("removing the landlord role records each unlinked property as not theirs", async () => {
+    const user = await createUser({ roles: "both" });
+    const otherLandlord = await createUser({ roles: "landlord" });
+    const renter = await createUser({ roles: "renter" });
+    const listedByMe = await insertProperty({ landlordId: user.id, createdById: user.id, landlordConfirmed: true });
+    const linkedByRenter = await insertProperty({ landlordId: user.id, createdById: renter.id });
+    const placeIRent = await insertProperty({ landlordId: otherLandlord.id, createdById: user.id });
+    const db = await getDb();
+    // Disclaimed once before (then claimed back): recording it again is fine.
+    await db.insert(propertyDisclaimers).values({ propertyId: linkedByRenter.id, userId: user.id });
+    await logInAs(user);
+
+    expect((await changeRoleTo("landlord", "remove")).status).toBe("success");
+    const disclaimed = await db
+      .select({ propertyId: propertyDisclaimers.propertyId })
+      .from(propertyDisclaimers)
+      .where(eq(propertyDisclaimers.userId, user.id));
+    expect(disclaimed.map((row) => row.propertyId).sort()).toEqual([listedByMe.id, linkedByRenter.id].sort());
+    const [listed] = await db.select().from(properties).where(eq(properties.id, listedByMe.id));
+    expect(listed).toMatchObject({ landlordId: null, landlordConfirmed: false });
+    expect(await landlordOf(placeIRent.id)).toBe(otherLandlord.id);
+  });
+
+  it("removing the landlord role with no properties records nothing; a refused removal records nothing", async () => {
+    const user = await createUser({ roles: "both" });
+    const db = await getDb();
+    await logInAs(user);
+    expect((await changeRoleTo("landlord", "remove")).status).toBe("success");
+    expect(await db.select().from(propertyDisclaimers).where(eq(propertyDisclaimers.userId, user.id))).toEqual([]);
+
+    const reviewed = await createUser({ roles: "both" });
+    const renter = await createUser({ roles: "renter" });
+    const property = await insertProperty({ landlordId: reviewed.id, createdById: renter.id });
+    await insertReview({ kind: "landlord", authorId: renter.id, subjectUserId: reviewed.id });
+    await logInAs(reviewed);
+    expect(await changeRoleTo("landlord", "remove")).toEqual({ status: "error", message: reviewedAs("landlord") });
+    expect(await landlordOf(property.id)).toBe(reviewed.id);
+    expect(await db.select().from(propertyDisclaimers).where(eq(propertyDisclaimers.userId, reviewed.id))).toEqual([]);
+  });
+
   it("removing the renter role keeps the properties you manage", async () => {
     const user = await createUser({ roles: "both" });
     const managed = await insertProperty({ landlordId: user.id, createdById: user.id });
@@ -1607,6 +1783,39 @@ describe("deleteAccount", () => {
     const row = await rowByKennitala(user.kennitala);
     expect(row!.id).not.toBe(user.id);
   });
+
+  it.skipIf(!usingPostgres)(
+    "a profile they reviewed that another transaction had locked is still tidied up, once that one commits",
+    async () => {
+      const user = await createUser({ roles: "both" });
+      const onlyMine = await createUser({ roles: "landlord", account: false });
+      await insertReview({ kind: "landlord", authorId: user.id, subjectUserId: onlyMine.id });
+      const db = await getDb();
+      let locked!: () => void;
+      const isLocked = new Promise<void>((resolve) => (locked = resolve));
+      let release!: () => void;
+      const released = new Promise<void>((resolve) => (release = resolve));
+      // E.g. someone else's deleteReview reconciling the same profile, keeping it for now.
+      const holding = db.transaction(async (tx) => {
+        await tx.select({ id: users.id }).from(users).where(eq(users.id, onlyMine.id)).for("update");
+        locked();
+        await released;
+      });
+      await isLocked;
+
+      const visitor = await logInAs(user);
+      const closing = asVisitor(visitor, () => closeAccount());
+      await pause(150);
+      // The account is gone already; the profile waits for the other transaction.
+      expect(await userRow(user.id)).toBeNull();
+      expect(await userRow(onlyMine.id)).not.toBeNull();
+      release();
+      await holding;
+      expect(await closing).toEqual({ redirect: "/?account=deleted" });
+      expect(await userRow(onlyMine.id)).toBeNull();
+    },
+    30_000,
+  );
 
   it.skipIf(!usingPostgres)(
     "a review about them that arrives while they close the account is never left hidden",

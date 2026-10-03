@@ -1,4 +1,4 @@
-import { expect, test, type APIRequestContext, type BrowserContext, type Locator, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext } from "@playwright/test";
 import {
   addProperty,
   cardMeta,
@@ -6,30 +6,54 @@ import {
   createActor,
   DEMO,
   escapeRegExp,
+  expectNoKennitala,
+  expectNoKennitalaInUrls,
   fillReview,
   fillSignup,
   findPersonPath,
   findPropertyPath,
+  firstName,
+  FIX_FIELDS,
   formAlert,
   formatKennitala,
   formStatus,
   freshKennitala,
-  kennitalaVariants,
+  homeSearchBox,
+  idOf,
+  INVALID_KENNITALA,
+  KENNITALA_POINTER,
+  KEPT_NAME,
+  keptNameNotice,
+  kennitalaLeaks,
+  landlordLink,
   logInAs,
+  lookupField,
   lookUpKennitala,
   lookupSection,
   makeProperty,
   makeReview,
   makeUser,
-  nameToken,
+  MISMATCH,
+  NO_ACCOUNT_NOTE,
+  NO_KENNITALA_IN_TEXT,
+  noAccountBadge,
   NOT_A_KENNITALA,
+  notYouLink,
+  personCard,
+  personName,
+  postButton,
   propertyLabel,
+  recordRequests,
   reviewBodyInput,
   reviewCard,
   reviewKennitalaInput,
   reviewTitleInput,
+  robotsMeta,
+  searchBox,
   signUp,
   startReviewByKennitala,
+  thisMonth,
+  unconfirmedNote,
   wizardSubjectHeading,
   writeReviewByKennitala,
 } from "./helpers";
@@ -41,54 +65,7 @@ import {
  * typing it into and the account owner's own dashboard.
  */
 
-const MISMATCH =
-  "That kennitala doesn't match this profile. Several people can share a name, so check you're on the right page.";
-const INVALID = "That isn't a valid kennitala. Enter 10 digits, e.g. 123456-7890.";
-const NO_KENNITALA_IN_TEXT = "Don't include a kennitala here. ID numbers are never shown on GossipRent.";
 const NOT_FOUND = "Nobody with this kennitala has been reviewed yet.";
-const POINTER = "To look up a kennitala, use the form below.";
-const NO_ACCOUNT_NOTE =
-  "This person doesn't have a GossipRent account. The page was created when the first review was written, and the name is the one its author entered. Is this you? Sign up with your kennitala to take over the page. Reviews others wrote about you stay on it.";
-
-/** Every way a kennitala could appear in a page or a URL, raw or percent-encoded. */
-function variants(kennitala: string): string[] {
-  const digits = kennitala.replace(/\D/g, "");
-  const [birth, rest] = [digits.slice(0, 6), digits.slice(6)];
-  return [...kennitalaVariants(digits), `${birth}%20${rest}`, `${birth}+${rest}`, `${birth}%2D${rest}`];
-}
-
-/**
- * Where `text` (a page, a payload, a URL) contains any of `kennitalas`, in any
- * form, each quoted with a little of the text around it rather than all of it.
- */
-function kennitalaLeaks(text: string, kennitalas: readonly string[], where: string): string[] {
-  const leaks: string[] = [];
-  for (const kennitala of kennitalas) {
-    for (const variant of variants(kennitala)) {
-      const at = text.indexOf(variant);
-      if (at !== -1) leaks.push(`${where} contains ${variant}: …${text.slice(Math.max(0, at - 80), at + 40)}…`);
-    }
-  }
-  return leaks;
-}
-
-// One expect per text, not per kennitala and variant: every expect() is a
-// recorded step, and tens of thousands of them take minutes.
-function expectNoKennitala(text: string, kennitalas: readonly string[], where: string): void {
-  expect(kennitalaLeaks(text, kennitalas, where)).toEqual([]);
-}
-
-/** Record the URL of every request any page of `context` makes (navigations, redirects, fetches, actions). */
-function recordRequests(context: BrowserContext): string[] {
-  const urls: string[] = [];
-  context.on("request", (request) => urls.push(request.url()));
-  return urls;
-}
-
-function expectNoKennitalaInUrls(urls: readonly string[], kennitalas: readonly string[]): void {
-  expect(urls.length).toBeGreaterThan(0);
-  expect(urls.flatMap((url) => kennitalaLeaks(url, kennitalas, `request ${url}`))).toEqual([]);
-}
 
 /**
  * A page as a visitor gets it: its HTML (with the page's metadata), and the
@@ -117,36 +94,6 @@ async function expectPagesFreeOf(
     leaks.push(...kennitalaLeaks(rsc, kennitalas, `${path} RSC as ${who}`));
   }
   expect(leaks).toEqual([]);
-}
-
-/** The id at the end of "/landlords/<uuid>". */
-function idOf(path: string): string {
-  return path.split("/").pop()!;
-}
-
-/** A person card (a link) in a directory or search result. */
-function personCard(scope: Page | Locator, name: string): Locator {
-  return scope.getByRole("link", { name: new RegExp(escapeRegExp(name)) });
-}
-
-function robotsMeta(page: Page): Locator {
-  return page.locator('meta[name="robots"]');
-}
-
-/** "October 2026": how profiles show the current month. */
-function thisMonth(): string {
-  return new Intl.DateTimeFormat("en-GB", { month: "long", year: "numeric", timeZone: "Atlantic/Reykjavik" }).format(
-    new Date(),
-  );
-}
-
-/** A person's name: letters only, unique. */
-function personName(first: string): string {
-  return `${first} ${nameToken()}`;
-}
-
-function postButton(page: Page): Locator {
-  return page.getByRole("button", { name: "Post review" });
 }
 
 // ---------------------------------------------------------------------------
@@ -232,7 +179,7 @@ test.describe("kennitalas are never shown", () => {
       body: `They gave me the kennitala ${someone} for the lease.`,
     });
     await postButton(page).click();
-    await expect(formAlert(page)).toHaveText("Please fix the highlighted fields.");
+    await expect(formAlert(page)).toHaveText(FIX_FIELDS);
     await expect(page.getByText(NO_KENNITALA_IN_TEXT, { exact: true })).toHaveCount(2);
     await expect(reviewTitleInput(page)).toHaveAttribute("aria-invalid", "true");
     await expect(reviewBodyInput(page)).toHaveAttribute("aria-invalid", "true");
@@ -245,7 +192,21 @@ test.describe("kennitalas are never shown", () => {
     await expect(page.getByText(NO_KENNITALA_IN_TEXT, { exact: true })).toHaveCount(1);
     await expect(reviewBodyInput(page)).toHaveAttribute("aria-invalid", "true");
 
-    // The dashboard's "About me".
+    // However the two parts are spaced or dashed (each on a fresh form, so the
+    // error is this attempt's).
+    const [birth, rest] = someone.split("-");
+    for (const spelled of [`${birth} - ${rest}`, `${birth} -${rest}`, `${birth}  ${rest}`, `${birth}–${rest}`, `${birth} – ${rest}`]) {
+      await page.goto(landlord.profilePath);
+      await reviewKennitalaInput(page).fill(landlord.user.kennitala);
+      await fillReview(page, { stars: 4, title: "Fair landlord", body: `My landlord's number is ${spelled}, ask them.` });
+      await postButton(page).click();
+      await expect(reviewBodyInput(page), spelled).toHaveAccessibleDescription(
+        new RegExp(`${escapeRegExp(NO_KENNITALA_IN_TEXT)}$`),
+      );
+    }
+    await expect(page.getByRole("heading", { name: "Reviews (0)" })).toBeVisible();
+
+    // The dashboard's bio.
     await page.goto("/dashboard");
     await page.getByLabel("Bio").fill(`Reach me via ${someone.replace("-", "")}.`);
     await page.getByRole("button", { name: "Save profile" }).click();
@@ -286,7 +247,7 @@ test.describe("a review by kennitala", () => {
     const header = page.getByRole("main").locator("section").first();
     await expect(header.getByRole("heading", { level: 1, name })).toBeVisible();
     await expect(header.getByText("Landlord", { exact: true })).toBeVisible();
-    await expect(header.getByText("No account", { exact: true })).toBeVisible();
+    await expect(noAccountBadge(page)).toBeVisible();
     await expect(header.getByText(`First reviewed ${thisMonth()}`, { exact: true })).toBeVisible();
     await expect(header.getByText(/Member since/)).toHaveCount(0);
     await expect(header.getByText("Identity not verified")).toHaveCount(0);
@@ -305,7 +266,7 @@ test.describe("a review by kennitala", () => {
     // The directory lists the page, marked "No account".
     await page.goto(`/landlords?q=${encodeURIComponent(name)}`);
     await expect(page.getByText(`1 landlord matching “${name}”`)).toBeVisible();
-    const card = personCard(page.getByRole("main"), name);
+    const card = personCard(page, name);
     await expect(card).toHaveAttribute("href", path);
     expect(await cardMeta(card)).toEqual(["Landlord", "No account"]);
     expect(await cardSubtitle(card)).toBe("No properties yet");
@@ -360,12 +321,9 @@ test.describe("a review by kennitala", () => {
     await signUp(page, user);
     // The page had been reviewed, so it keeps its name: the dashboard says why.
     await expect(page).toHaveURL("/dashboard?name=kept");
-    await expect(page.getByRole("heading", { level: 1, name: `Hi, ${name.split(" ")[0]}` })).toBeVisible();
-    const notice = page.getByRole("main").getByRole("status").filter({ hasText: "People had already reviewed you" });
-    await expect(notice).toHaveText(
-      "People had already reviewed you, so your page keeps the name they used. If it's wrong, report it.",
-    );
-    await expect(notice.getByRole("link", { name: "report it" })).toHaveAttribute(
+    await expect(page.getByRole("heading", { level: 1, name: `Hi, ${firstName(name)}` })).toBeVisible();
+    await expect(keptNameNotice(page)).toHaveText(KEPT_NAME);
+    await expect(keptNameNotice(page).getByRole("link", { name: "report it" })).toHaveAttribute(
       "href",
       `/report?target=profile&id=${idOf(path)}`,
     );
@@ -381,7 +339,7 @@ test.describe("a review by kennitala", () => {
     await page.goto(path);
     const header = page.getByRole("main").locator("section").first();
     await expect(header.getByRole("heading", { level: 1, name })).toBeVisible();
-    await expect(header.getByText("No account", { exact: true })).toHaveCount(0);
+    await expect(noAccountBadge(page)).toHaveCount(0);
     await expect(header.getByText(NO_ACCOUNT_NOTE)).toHaveCount(0);
     await expect(header.getByText(`Testbær · Member since ${thisMonth()}`, { exact: true })).toBeVisible();
     await expect(header.getByText("Identity not verified", { exact: true })).toBeVisible();
@@ -390,7 +348,7 @@ test.describe("a review by kennitala", () => {
     await expect(page.getByRole("navigation", { name: "Ratings by role" }).getByRole("link")).toHaveCount(2);
 
     await page.goto(`/landlords?q=${encodeURIComponent(name)}`);
-    expect(await cardMeta(personCard(page.getByRole("main"), name))).toEqual(["Landlord", "· Also a renter"]);
+    expect(await cardMeta(personCard(page, name))).toEqual(["Landlord", "· Also a renter"]);
 
     // The kennitala went in the sign-up form post only, and isn't on their public pages.
     expectNoKennitalaInUrls(requests, [kennitala]);
@@ -404,7 +362,7 @@ test.describe("a review by kennitala", () => {
     await thiefPage.goto("/signup");
     await fillSignup(thiefPage, makeUser("renter", { kennitala: formatKennitala(kennitala) }));
     await expect(thiefPage.getByText("This kennitala already has an account.", { exact: true })).toBeVisible();
-    await expect(thiefPage.getByRole("link", { name: "Not you? Report it" })).toHaveAttribute(
+    await expect(notYouLink(thiefPage)).toHaveAttribute(
       "href",
       "/report?target=account",
     );
@@ -438,7 +396,7 @@ test.describe("a review by kennitala", () => {
       await field.fill(wrong);
       await fillReview(page, review);
       await postButton(page).click();
-      await expect(formAlert(page)).toHaveText("Please fix the highlighted fields.");
+      await expect(formAlert(page)).toHaveText(FIX_FIELDS);
       await expect(page.getByText(MISMATCH, { exact: true })).toBeVisible();
       await expect(field).toBeFocused();
       await expect(field).toHaveAttribute("aria-invalid", "true");
@@ -454,7 +412,7 @@ test.describe("a review by kennitala", () => {
     await expect(page.getByText("That's your own kennitala.", { exact: true })).toBeVisible();
     await field.fill(NOT_A_KENNITALA);
     await postButton(page).click();
-    await expect(page.getByText(INVALID, { exact: true })).toBeVisible();
+    await expect(page.getByText(INVALID_KENNITALA, { exact: true })).toBeVisible();
     await field.fill("");
     await postButton(page).click();
     await expect(page.getByText("Enter the landlord's kennitala.", { exact: true })).toBeVisible();
@@ -556,7 +514,7 @@ test.describe("looking up a kennitala", () => {
     await expect(answer).toHaveText(`${NOT_FOUND} Write the first review`);
     await expect(answer).toBeFocused();
     await expect(page).toHaveURL("/");
-    await expect(lookupSection(page).getByLabel("Kennitala", { exact: true })).toHaveValue(formatKennitala(unknown));
+    await expect(lookupField(page)).toHaveValue(formatKennitala(unknown));
     await answer.getByRole("link", { name: "Write the first review" }).click();
     await expect(page).toHaveURL("/reviews/new");
     await expect(page.getByRole("heading", { level: 2, name: "Who do you want to review?" })).toBeVisible();
@@ -564,8 +522,8 @@ test.describe("looking up a kennitala", () => {
     // Not a kennitala, or nothing at all.
     await page.goto("/search");
     await lookUpKennitala(page, NOT_A_KENNITALA);
-    await expect(lookupSection(page).getByText(INVALID, { exact: true })).toBeVisible();
-    await expect(lookupSection(page).getByLabel("Kennitala", { exact: true })).toBeFocused();
+    await expect(lookupSection(page).getByText(INVALID_KENNITALA, { exact: true })).toBeVisible();
+    await expect(lookupField(page)).toBeFocused();
     await lookUpKennitala(page, "");
     await expect(lookupSection(page).getByText("Enter a kennitala.", { exact: true })).toBeVisible();
     await expect(page).toHaveURL("/search");
@@ -605,26 +563,27 @@ test.describe("looking up a kennitala", () => {
 
     // The home page has the lookup form: the number moves into it.
     await page.goto("/");
-    const search = page.getByRole("searchbox", { name: "Search landlords, renters, and properties" });
+    const search = homeSearchBox(page);
     await search.fill(kennitala);
     await search.press("Enter");
-    const field = lookupSection(page).getByLabel("Kennitala", { exact: true });
+    const field = lookupField(page);
     await expect(field).toHaveValue(kennitala);
     await expect(field).toBeFocused();
     await expect(search).toHaveValue("");
-    await expect(page.getByRole("main").getByRole("status").filter({ hasText: POINTER })).toHaveText(POINTER);
+    await expect(page.getByRole("main").getByRole("status").filter({ hasText: KENNITALA_POINTER })).toHaveText(KENNITALA_POINTER);
     await expect(page).toHaveURL("/");
     await lookupSection(page).getByRole("button", { name: "Look up", exact: true }).click();
     await expect(page.getByRole("heading", { level: 1, name: DEMO.people.gunnar.name })).toBeVisible();
 
     // A directory has none: the visitor is sent to /search?kt=1, without the number.
     await page.goto("/renters");
-    const filter = page.getByRole("main").getByRole("searchbox");
-    await filter.fill(`kt. ${kennitala}`);
-    await filter.press("Enter");
+    await searchBox(page).fill(`kt. ${kennitala}`);
+    await searchBox(page).press("Enter");
     await expect(page).toHaveURL("/search?kt=1");
-    await expect(page.getByText(POINTER, { exact: true })).toBeVisible();
-    await expect(lookupSection(page).getByLabel("Kennitala", { exact: true })).toHaveValue("");
+    await expect(page.getByText(KENNITALA_POINTER, { exact: true })).toBeVisible();
+    // The cursor is in the lookup field, which is empty: the number isn't carried over.
+    await expect(lookupField(page)).toBeFocused();
+    await expect(lookupField(page)).toHaveValue("");
     expectNoKennitalaInUrls(requests, [kennitala]);
 
     // Without JavaScript the search is sent, but the page redirects without
@@ -632,10 +591,13 @@ test.describe("looking up a kennitala", () => {
     const noJs = await browser.newContext({ javaScriptEnabled: false });
     const noJsPage = await noJs.newPage();
     await noJsPage.goto("/landlords");
-    await noJsPage.getByRole("main").getByRole("searchbox").fill(kennitala);
+    await searchBox(noJsPage).fill(kennitala);
     await noJsPage.getByRole("main").getByRole("button", { name: "Search", exact: true }).click();
     await expect(noJsPage).toHaveURL("/search?kt=1");
-    await expect(noJsPage.getByText(POINTER, { exact: true })).toBeVisible();
+    await expect(noJsPage.getByText(KENNITALA_POINTER, { exact: true })).toBeVisible();
+    // The page itself puts the cursor in the lookup field (autofocus, no script needed).
+    await expect(lookupField(noJsPage)).toHaveAttribute("autofocus", "");
+    await expect(lookupField(noJsPage)).toBeFocused();
     expectNoKennitala(await noJsPage.content(), [kennitala], "/search?kt=1");
     await noJs.close();
   });
@@ -656,19 +618,21 @@ test("linking a new landlord to a property creates their page without putting th
   const property = makeProperty();
 
   const propertyPath = await addProperty(page, property, { kennitala: formatKennitala(kennitala), name });
-  await expect(page.getByText("Added by a renter, not confirmed")).toBeVisible();
-  const landlordLink = page.getByRole("main").getByRole("link", { name, exact: true });
-  const landlordPath = await landlordLink.getAttribute("href");
+  await expect(unconfirmedNote(page)).toBeVisible();
+  const landlordPath = await landlordLink(page, name).getAttribute("href");
   expect(landlordPath).toMatch(/^\/landlords\/[0-9a-f-]{36}$/);
 
   // The landlord's new page: no account, nobody has reviewed them, one property.
-  await landlordLink.click();
+  await landlordLink(page, name).click();
   await expect(page.getByRole("heading", { level: 1, name })).toBeVisible();
-  await expect(page.getByRole("main").locator("section").first().getByText("No account", { exact: true })).toBeVisible();
+  await expect(noAccountBadge(page)).toBeVisible();
+  // No review made this page: the note doesn't say one did.
+  await expect(page.getByText(NO_ACCOUNT_NOTE, { exact: true })).toBeVisible();
+  await expect(page.getByText(/review was written|its author entered/)).toHaveCount(0);
   await expect(page.getByText(/^First reviewed/)).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Properties (1)" })).toBeVisible();
   await page.goto(`/landlords?q=${encodeURIComponent(name)}`);
-  const card = personCard(page.getByRole("main"), name);
+  const card = personCard(page, name);
   expect(await cardMeta(card)).toEqual(["Landlord", "No account"]);
   expect(await cardSubtitle(card)).toBe("1 property");
 

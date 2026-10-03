@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import { getDb, pgErrorCode, type Transaction } from "@/db";
-import { properties, reviews, users } from "@/db/schema";
+import { properties, propertyDisclaimers, reviews, users } from "@/db/schema";
 import { getFormat, getT, type T } from "@/i18n/server";
 import { getCurrentUser, type SessionUser } from "@/lib/auth/current-user";
 import {
@@ -25,9 +25,14 @@ import { subjectPath } from "@/lib/paths";
 import {
   ensurePerson,
   findPersonByKennitala,
+  getOwnKennitala,
   grantRoleByKennitala,
+  hasReviewedProperty,
+  isDisclaimedLandlord,
   propertyAddressKeys,
   reconcileProfiles,
+  reconcileSkipped,
+  type Executor,
   type Person,
 } from "@/lib/people";
 import type { FormState } from "@/lib/form-state";
@@ -55,6 +60,13 @@ import {
  *
  * The creator of a property can change its landlord while that landlord has
  * no account; a landlord with an account can only unlink themselves.
+ * `landlord_confirmed` records whether the landlord linked the property
+ * themselves (listed it as their own, or claimed it). Someone who said "Not my
+ * property" (a property_disclaimers row) can only be linked to it again by
+ * claiming it; nobody can be linked to a property they reviewed.
+ *
+ * A transaction that locks a property and a person locks the property first
+ * (see src/lib/people.ts).
  */
 
 /** What a kennitala lookup found, for the author who typed it (never anyone else). */
@@ -93,16 +105,6 @@ function tooManyAttempts(t: T, formData: FormData, extra: Partial<PropertyFormSt
   return { status: "error", message: t("errors.tryLater"), values: formValues(formData), ...extra };
 }
 
-/** The signed-in account's own kennitala, compared here (never sent in a query); null if it's no longer an account. */
-async function ownKennitala(userId: string): Promise<string | null> {
-  const db = await getDb();
-  const [row] = await db
-    .select({ kennitala: users.kennitala })
-    .from(users)
-    .where(and(eq(users.id, userId), isNotNull(users.passwordHash)));
-  return row?.kennitala ?? null;
-}
-
 // ---------------------------------------------------------------------------
 // Landlord by kennitala (shared by adding a property and changing its landlord)
 // ---------------------------------------------------------------------------
@@ -117,7 +119,7 @@ async function kennitalaRefusal(
   kennitala: ParsedKennitala,
   formData: FormData,
 ): Promise<PropertyFormState | null> {
-  const own = await ownKennitala(userId);
+  const own = await getOwnKennitala(userId);
   if (!own) return { status: "error", message: t("errors.logInAgain") };
   if (kennitala.value === own) {
     return fieldError(t, formData, "landlordKennitala", t("properties.messages.ownKennitala"));
@@ -145,12 +147,53 @@ async function describeLookup(kennitala: ParsedKennitala, person: Person | null)
   };
 }
 
-/** "Check": who has this kennitala, without saving anything. */
-async function lookUpLandlord(t: T, userId: string, value: string, formData: FormData): Promise<PropertyFormState> {
+/** Why someone can't be linked to an existing property as its landlord by its creator. */
+type LinkRefusal = "disclaimed" | "reviewed";
+
+// Message keys.
+const LINK_REFUSAL_MESSAGES = {
+  disclaimed: "properties.messages.relinkDisclaimed",
+  reviewed: "properties.messages.relinkReviewed",
+} as const;
+
+/**
+ * Whether the holder of this kennitala can't be made the landlord of existing
+ * property `propertyId` by someone else: they said it isn't theirs ("Not my
+ * property", or dropping the landlord role; only a claim of their own links
+ * them again), or they reviewed it (landlords don't review their own
+ * property). Inside a transaction, run it after locking the property row: a
+ * review of it, a disclaimer and a claim all lock that row too.
+ */
+async function linkRefusal(executor: Executor, kennitala: string, propertyId: string): Promise<LinkRefusal | null> {
+  if (await isDisclaimedLandlord(executor, kennitala, propertyId)) return "disclaimed";
+  if (await hasReviewedProperty(executor, kennitala, propertyId)) return "reviewed";
+  return null;
+}
+
+function linkRefusalState(t: T, refusal: LinkRefusal, formData: FormData): PropertyFormState {
+  return fieldError(t, formData, "landlordKennitala", t(LINK_REFUSAL_MESSAGES[refusal]));
+}
+
+/**
+ * "Check": who has this kennitala, without saving anything. For an existing
+ * property (`propertyId`), also refuses whoever couldn't be linked to it, as
+ * saving would.
+ */
+async function lookUpLandlord(
+  t: T,
+  userId: string,
+  value: string,
+  formData: FormData,
+  propertyId?: string,
+): Promise<PropertyFormState> {
   const kennitala = parseKennitalaInput(value)!;
   const refusal = await kennitalaRefusal(t, userId, kennitala, formData);
   if (refusal) return refusal;
   if (!(await consumeCheck(userId))) return tooManyAttempts(t, formData);
+  if (propertyId) {
+    const refused = await linkRefusal(await getDb(), kennitala.value, propertyId);
+    if (refused) return linkRefusalState(t, refused, formData);
+  }
   const person = await findPersonByKennitala(kennitala.value);
   return {
     status: "idle",
@@ -342,6 +385,8 @@ export async function createProperty(_prev: PropertyFormState, formData: FormDat
           postalCode: data.postalCode,
           description: data.description,
           landlordId,
+          // Listing it as your own confirms it; a renter naming the landlord doesn't.
+          landlordConfirmed: relation === "own",
           createdById: user.id,
         })
         .returning({ id: properties.id });
@@ -388,36 +433,44 @@ function revalidatePropertyPages(propertyId: string, ...landlordIds: (string | n
 }
 
 /**
- * A landlord claims a listed property that has no landlord yet. Refused if
- * they've reviewed it, since landlords can't review their own properties.
+ * A landlord claims a listed property that has no landlord yet (which also
+ * confirms the link, and takes back a "Not my property" they said earlier).
+ * Refused if they've reviewed it, since landlords can't review their own
+ * properties.
  */
 async function claimProperty(t: T, user: SessionUser, propertyId: string): Promise<PropertyFormState> {
   const db = await getDb();
-  // Locks: the user row (so the landlord role can't be removed mid-claim) and
-  // the property row (so two claims, or a claim and a review, take turns).
+  // Locks, property first as everywhere: the property row (so two claims, a
+  // claim and a review, or a claim and a change of landlord take turns), then
+  // the user row (so the landlord role can't be removed mid-claim).
   const outcome = await db.transaction(async (tx) => {
-    const [me] = await tx
-      .select({ isLandlord: users.isLandlord })
-      .from(users)
-      .where(and(eq(users.id, user.id), isNotNull(users.passwordHash)))
-      .for("share");
-    if (!me?.isLandlord) return "notLandlord" as const;
     const [property] = await tx
       .select({ landlordId: properties.landlordId })
       .from(properties)
       .where(eq(properties.id, propertyId))
       .for("update");
     if (!property) return "missing" as const;
-    if (property.landlordId) {
-      return property.landlordId === user.id ? ("claimed" as const) : ("taken" as const);
-    }
+    const [me] = await tx
+      .select({ isLandlord: users.isLandlord })
+      .from(users)
+      .where(and(eq(users.id, user.id), isNotNull(users.passwordHash)))
+      .for("share");
+    if (!me?.isLandlord) return "notLandlord" as const;
+    if (property.landlordId && property.landlordId !== user.id) return "taken" as const;
     const [reviewed] = await tx
       .select({ id: reviews.id })
       .from(reviews)
       .where(and(eq(reviews.propertyId, propertyId), eq(reviews.authorId, user.id)))
       .limit(1);
     if (reviewed) return "reviewed" as const;
-    await tx.update(properties).set({ landlordId: user.id }).where(eq(properties.id, propertyId));
+    // Also when a renter had already linked them: saying "I manage this property" confirms it.
+    await tx
+      .update(properties)
+      .set({ landlordId: user.id, landlordConfirmed: true })
+      .where(eq(properties.id, propertyId));
+    await tx
+      .delete(propertyDisclaimers)
+      .where(and(eq(propertyDisclaimers.propertyId, propertyId), eq(propertyDisclaimers.userId, user.id)));
     return "claimed" as const;
   });
   // Refresh even when refused, so the page shows who manages it now.
@@ -439,16 +492,24 @@ async function claimProperty(t: T, user: SessionUser, propertyId: string): Promi
 /**
  * The linked landlord removes themselves from a property ("Not my property",
  * e.g. a renter linked the wrong person). The listing and its reviews stay.
+ * It's recorded, so the property's creator can't link them again; they can
+ * still claim it themselves.
  */
 async function unlinkProperty(t: T, user: SessionUser, propertyId: string): Promise<PropertyFormState> {
   const db = await getDb();
-  const unlinked = await db
-    .update(properties)
-    .set({ landlordId: null })
-    .where(and(eq(properties.id, propertyId), eq(properties.landlordId, user.id)))
-    .returning({ id: properties.id });
+  const unlinked = await db.transaction(async (tx) => {
+    // The update locks the property row before the disclaimer refers to the user's.
+    const rows = await tx
+      .update(properties)
+      .set({ landlordId: null, landlordConfirmed: false })
+      .where(and(eq(properties.id, propertyId), eq(properties.landlordId, user.id)))
+      .returning({ id: properties.id });
+    if (rows.length === 0) return false;
+    await tx.insert(propertyDisclaimers).values({ propertyId, userId: user.id }).onConflictDoNothing();
+    return true;
+  });
   revalidatePropertyPages(propertyId, user.id);
-  return unlinked.length > 0
+  return unlinked
     ? { status: "success", message: t("properties.messages.unlinked") }
     : { status: "error", message: t("properties.messages.unlinkNotListed") };
 }
@@ -481,13 +542,22 @@ const relinkSchema = z.object({
 });
 
 type RelinkResult =
-  | { ok: true; oldLandlordId: string | null; landlordId: string | null; profileCreated: boolean }
-  | { ok: false; refusal: "logInAgain" | "missing" | "notCreator" | "hasAccount" | "vanished" };
+  | {
+      ok: true;
+      oldLandlordId: string | null;
+      landlordId: string | null;
+      profileCreated: boolean;
+      /** Profiles reconcileProfiles skipped, for reconcileSkipped after the commit. */
+      skipped: string[];
+    }
+  | { ok: false; refusal: "logInAgain" | "missing" | "notCreator" | "hasAccount" | "vanished" | LinkRefusal };
 
 /**
  * The property's creator links another landlord by kennitala, or (with the
  * field empty) removes the link, while the linked landlord has no account.
- * A profile without an account that nothing refers to any more is deleted.
+ * Nobody can be linked to a property they reviewed, or one they said isn't
+ * theirs. A renter naming the landlord doesn't confirm the link. A profile
+ * without an account that nothing refers to any more is deleted.
  */
 async function relinkLandlord(
   t: T,
@@ -502,7 +572,7 @@ async function relinkLandlord(
     const parsed = parseForm(propertySchema, formData, t);
     if (!parsed.success) return parsed.state;
     if (parsed.data.intent !== "check") return { status: "error", message: t("properties.messages.unknownAction") };
-    return lookUpLandlord(t, user.id, parsed.data.landlordKennitala, formData);
+    return lookUpLandlord(t, user.id, parsed.data.landlordKennitala, formData, propertyId);
   }
 
   const parsed = parseForm(relinkSchema, formData, t);
@@ -515,6 +585,10 @@ async function relinkLandlord(
   let result: RelinkResult;
   try {
     result = await db.transaction(async (tx): Promise<RelinkResult> => {
+      // The author before the property, unlike the property-first order
+      // elsewhere: this key-share lock only conflicts with closing the account,
+      // which locks the user row before deleting it nulls the creator of their
+      // properties, so locking the property first could deadlock with that.
       const [author] = await tx
         .select({ id: users.id })
         .from(users)
@@ -543,17 +617,25 @@ async function relinkLandlord(
       let landlordId: string | null = null;
       let profileCreated = false;
       if (plan) {
+        // Before the role grant, which would otherwise have to be undone. The
+        // property lock keeps a review of it or a disclaimer from arriving meanwhile.
+        const refused = await linkRefusal(tx, plan.kennitala.value, propertyId);
+        if (refused) return { ok: false, refusal: refused };
         const linked = await linkLandlord(tx, plan);
         if (!linked) return { ok: false, refusal: "vanished" };
         landlordId = linked.id;
         profileCreated = linked.created;
       }
+      let skipped: string[] = [];
       if (landlordId !== oldLandlordId) {
-        await tx.update(properties).set({ landlordId }).where(eq(properties.id, propertyId));
+        await tx
+          .update(properties)
+          .set({ landlordId, landlordConfirmed: false })
+          .where(eq(properties.id, propertyId));
         // The old landlord may no longer be a landlord, or referred to at all.
-        if (oldLandlordId) await reconcileProfiles(tx, [oldLandlordId]);
+        skipped = await reconcileProfiles(tx, [oldLandlordId]);
       }
-      return { ok: true, oldLandlordId, landlordId, profileCreated };
+      return { ok: true, oldLandlordId, landlordId, profileCreated, skipped };
     });
   } catch (error) {
     await plan?.newProfile?.release();
@@ -573,9 +655,14 @@ async function relinkLandlord(
         return { status: "error", message: t("properties.messages.relinkHasAccount") };
       case "vanished":
         return vanishedState(t, plan!, formData);
+      case "disclaimed":
+      case "reviewed":
+        return linkRefusalState(t, result.refusal, formData);
     }
   }
   if (!result.profileCreated) await plan?.newProfile?.release();
+  // The old landlord's profile, if another transaction had it locked.
+  await reconcileSkipped(result.skipped);
 
   revalidatePropertyPages(propertyId, result.oldLandlordId, result.landlordId);
   return {

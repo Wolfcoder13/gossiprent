@@ -1,5 +1,5 @@
 {
-  "id": "87bde859-a7b0-48fe-a12e-e9d60ee754fd",
+  "id": "0430ccc5-97cf-4854-b725-e46a45226cb0",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -111,6 +111,13 @@
           "type": "uuid",
           "primaryKey": false,
           "notNull": false
+        },
+        "landlord_confirmed": {
+          "name": "landlord_confirmed",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
         },
         "created_by_id": {
           "name": "created_by_id",
@@ -231,6 +238,73 @@
           "value": "\"properties\".\"postal_code\" between 100 and 999"
         }
       },
+      "isRLSEnabled": false
+    },
+    "public.property_disclaimers": {
+      "name": "property_disclaimers",
+      "schema": "",
+      "columns": {
+        "property_id": {
+          "name": "property_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "property_disclaimers_property_id_properties_id_fk": {
+          "name": "property_disclaimers_property_id_properties_id_fk",
+          "tableFrom": "property_disclaimers",
+          "tableTo": "properties",
+          "columnsFrom": [
+            "property_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "property_disclaimers_user_id_users_id_fk": {
+          "name": "property_disclaimers_user_id_users_id_fk",
+          "tableFrom": "property_disclaimers",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "property_disclaimers_property_id_user_id_pk": {
+          "name": "property_disclaimers_property_id_user_id_pk",
+          "columns": [
+            "property_id",
+            "user_id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
       "isRLSEnabled": false
     },
     "public.reports": {

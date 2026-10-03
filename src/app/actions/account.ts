@@ -4,20 +4,13 @@ import { and, eq, isNotNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getDb, sanitizeDbError, type Transaction } from "@/db";
-import { properties, reviews, sessions, users, type UserRole } from "@/db/schema";
+import { properties, propertyDisclaimers, reviews, users, type UserRole } from "@/db/schema";
 import { getT } from "@/i18n/server";
 import { getCurrentUser } from "@/lib/auth/current-user";
 import { hashPassword, verifyPassword } from "@/lib/auth/password";
 import { consumeAttempt, RATE_LIMITS } from "@/lib/auth/rate-limit";
 import { deleteOtherSessions, deleteSession } from "@/lib/auth/session";
-import {
-  getProfileReferences,
-  isNameLocked,
-  isStillReferenced,
-  personNameKeys,
-  reconcileProfiles,
-  type ProfileReferences,
-} from "@/lib/people";
+import { detachAccount, isNameLocked, personNameKeys, reconcileProfiles, reconcileSkipped } from "@/lib/people";
 import type { FormState } from "@/lib/form-state";
 import {
   formValues,
@@ -94,7 +87,9 @@ export async function updateProfile(_prev: FormState, formData: FormData): Promi
 /**
  * Add a role ("I'm also a landlord") or remove one. A role can only be removed
  * while you keep the other one and nobody has reviewed you in it, so dropping
- * a role can't hide reviews. Removing "landlord" unlinks your properties.
+ * a role can't hide reviews. Removing "landlord" unlinks your properties and
+ * counts as "Not my property" for each, so only you can link one again (by
+ * claiming it).
  */
 export async function changeRole(_prev: FormState, formData: FormData): Promise<FormState> {
   const user = await getCurrentUser();
@@ -113,6 +108,16 @@ export async function changeRole(_prev: FormState, formData: FormData): Promise<
   // grant locks its subject) or a property link can't land in between the
   // checks and the change.
   const refusal = await db.transaction(async (tx) => {
+    // Dropping "landlord" unlinks their properties: lock those first, as every
+    // transaction that locks a property and a person does.
+    if (role === "landlord" && change === "remove") {
+      await tx
+        .select({ id: properties.id })
+        .from(properties)
+        .where(eq(properties.landlordId, user.id))
+        .orderBy(properties.id)
+        .for("update");
+    }
     const me = await lockAccount(tx, user.id, "no key update");
     if (!me) return t("errors.logInAgain");
     if (change === "add") {
@@ -127,7 +132,19 @@ export async function changeRole(_prev: FormState, formData: FormData): Promise<
       .limit(1);
     if (reviewed) return t(ROLE_MESSAGES[role].reviewedAs);
     if (role === "landlord") {
-      await tx.update(properties).set({ landlordId: null }).where(eq(properties.landlordId, user.id));
+      const unlinked = await tx
+        .update(properties)
+        .set({ landlordId: null, landlordConfirmed: false })
+        .where(eq(properties.landlordId, user.id))
+        .returning({ id: properties.id });
+      // As if they'd said "Not my property" to each: whoever added one can't
+      // link them again; they can claim it back themselves.
+      if (unlinked.length > 0) {
+        await tx
+          .insert(propertyDisclaimers)
+          .values(unlinked.map((property) => ({ propertyId: property.id, userId: user.id })))
+          .onConflictDoNothing();
+      }
     }
     await tx.update(users).set({ [flag]: false }).where(eq(users.id, user.id));
     return null;
@@ -197,9 +214,6 @@ export async function signOutOtherDevices(): Promise<FormState> {
   return { status: "success", message: t("account.password.signedOut") };
 }
 
-const hasReferences = (refs: ProfileReferences) =>
-  refs.reviewedAsLandlord || refs.reviewedAsRenter || refs.linkedAsLandlord;
-
 /**
  * Close the signed-in user's account.
  *
@@ -216,57 +230,27 @@ export async function deleteAccount(formData: FormData): Promise<void> {
   if (formData.get("confirm") !== "delete") return;
 
   const db = await getDb();
-  await db.transaction(async (tx) => {
+  const skipped = await db.transaction(async (tx) => {
     // Blocks reviews about them and property links (their role grants lock this
     // row) until this commits; the new statements below see any that came first.
     const me = await lockAccount(tx, user.id, "update");
-    if (!me) return;
+    if (!me) return [];
     const written = await tx
       .delete(reviews)
       .where(eq(reviews.authorId, user.id))
       .returning({ subjectUserId: reviews.subjectUserId });
-    await tx.delete(sessions).where(eq(sessions.userId, user.id));
-
-    let refs = (await getProfileReferences(tx, user.id))!;
-    let deleted = false;
-    if (!hasReferences(refs)) {
-      try {
-        // A savepoint, so a reference we couldn't see doesn't abort the transaction.
-        await tx.transaction(async (savepoint) => {
-          await savepoint.delete(users).where(eq(users.id, user.id));
-        });
-        deleted = true;
-      } catch (error) {
-        if (!isStillReferenced(error)) throw error;
-        refs = (await getProfileReferences(tx, user.id))!;
-      }
-    }
-    if (!deleted) {
-      const isLandlord = refs.reviewedAsLandlord || refs.linkedAsLandlord;
-      const isRenter = refs.reviewedAsRenter;
-      await tx
-        .update(users)
-        .set({
-          email: null,
-          passwordHash: null,
-          joinedAt: null,
-          city: null,
-          bio: null,
-          // The roles something still shows them in (a profile needs one; if
-          // nothing visible explains the reference, keep the roles as they were).
-          ...(isLandlord || isRenter ? { isLandlord, isRenter } : {}),
-        })
-        .where(eq(users.id, user.id));
-    }
+    // Sessions go, and the row is deleted or kept as a profile without an account.
+    await detachAccount(tx, user.id);
     // The people they reviewed may now have nothing left that refers to them.
-    await reconcileProfiles(
+    return reconcileProfiles(
       tx,
       written.map((review) => review.subjectUserId),
     );
   });
-
   // The session row is gone with the others; this clears the cookie.
   await deleteSession();
+  // Profiles someone else had locked meanwhile, now that this has committed.
+  await reconcileSkipped(skipped);
   revalidatePath("/", "layout");
   redirect("/?account=deleted");
 }
