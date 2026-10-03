@@ -7,13 +7,12 @@
     "build": "node scripts/migrate.mjs && next build",
     "start": "next start",
     "lint": "eslint",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "next typegen && tsc --noEmit",
     "test": "vitest run",
     "test:e2e": "playwright test",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "node scripts/migrate.mjs",
-    "db:seed": "tsx scripts/seed.ts",
-    "db:studio": "drizzle-kit studio"
+    "db:seed": "tsx scripts/seed.ts"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.8",
@@ -23,7 +22,6 @@
     "pg": "^8.23.1",
     "react": "19.2.8",
     "react-dom": "19.2.8",
-    "server-only": "^0.0.1",
     "zod": "^4.6.5"
   },
   "devDependencies": {

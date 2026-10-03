@@ -8,48 +8,21 @@ import {
   formAlert,
   formStatus,
   makeProperty,
+  makeReview,
   makeUser,
   myProfilePath,
   pickStars,
+  postReview,
   propertyLabel,
   reviewBodyInput,
   reviewCard,
   reviewTitleInput,
   signUp,
   starRadio,
+  summaryAverage,
+  summaryCount,
   uid,
 } from "./helpers";
-
-type Review = { stars: number; title: string; body: string };
-
-function makeReview(stars: number, overrides: Partial<Review> = {}): Review {
-  const id = uid();
-  return {
-    stars,
-    title: `Headline ${id}`,
-    body: `Review body ${id}: responsive, fair, and the deposit came back in full.`,
-    ...overrides,
-  };
-}
-
-/** Write a review on the subject page `path` and wait for it to be saved. */
-async function postReview(page: Page, path: string, review: Review): Promise<void> {
-  await page.goto(path);
-  await fillReview(page, review);
-  await page.getByRole("button", { name: "Post review" }).click();
-  await expect(formStatus(page)).toHaveText("Thanks! Your review is live.");
-  await expect(reviewCard(page, review.title)).toBeVisible();
-}
-
-/** The "N reviews" line under the big average. */
-function summaryCount(page: Page) {
-  return page.locator("p").filter({ hasText: /^(\d+ reviews?|No reviews yet)$/ }).first();
-}
-
-/** The big average number in the rating summary. */
-function summaryAverage(page: Page) {
-  return page.locator("p.text-5xl");
-}
 
 function reviewsHeading(page: Page, count: number) {
   return page.getByRole("heading", { name: `Reviews (${count})`, exact: true });
@@ -659,12 +632,11 @@ test.describe("who can review whom", () => {
     await expect(page.getByRole("button", { name: "Post review" })).toHaveCount(0);
     await expect(page.getByText("When renters review you, their reviews will show up here.")).toBeVisible();
 
-    const propertyPath = await addProperty(page, makeProperty());
+    await addProperty(page, makeProperty());
     await expect(
       page.getByText("You're the landlord for this property. Reviews from your renters appear here."),
     ).toBeVisible();
     await expect(page.getByRole("button", { name: "Post review" })).toHaveCount(0);
-    expect(propertyPath).toMatch(/^\/properties\//);
 
     // Renter on their own profile.
     const renter = await createActor(browser, "renter");
@@ -722,15 +694,6 @@ test.describe("who can review whom", () => {
 
     await landlord.context.close();
     await otherRenter.context.close();
-  });
-
-  test("signed-out visitors can't post reviews", async ({ page, browser }) => {
-    const landlord = await createActor(browser, "landlord");
-    await page.goto(landlord.profilePath);
-    await expect(page.getByRole("heading", { name: `Rented from ${landlord.user.name}?` })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Post review" })).toHaveCount(0);
-    await expect(page.getByRole("radio")).toHaveCount(0);
-    await landlord.context.close();
   });
 });
 

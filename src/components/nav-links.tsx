@@ -10,10 +10,10 @@ const LINKS = [
   { href: "/properties", label: "Properties" },
 ];
 
-export function NavLinks({ className }: { className?: string }) {
+export function NavLinks() {
   const pathname = usePathname();
   return (
-    <ul className={cx("flex flex-wrap items-center gap-x-1 gap-y-1.5", className)}>
+    <ul className="flex flex-wrap items-center gap-x-1 gap-y-1.5">
       {LINKS.map((link) => {
         const active = pathname === link.href || pathname.startsWith(`${link.href}/`);
         return (

@@ -66,7 +66,6 @@ export type SessionUser = {
   isRenter: boolean;
   city: string | null;
   bio: string | null;
-  createdAt: Date;
 };
 
 /** The signed-in user for the current request's cookie, or null. */
@@ -85,7 +84,6 @@ export async function readSessionUser(): Promise<SessionUser | null> {
       isRenter: users.isRenter,
       city: users.city,
       bio: users.bio,
-      createdAt: users.createdAt,
     })
     .from(sessions)
     .innerJoin(users, eq(users.id, sessions.userId))

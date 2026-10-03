@@ -70,7 +70,6 @@ New deployments start empty. To add the demo data to a hosted database, run `DAT
 | `npm run db:generate` | Create a new migration after changing `src/db/schema.ts`.           |
 | `npm run db:migrate`  | Apply migrations to `DATABASE_URL`.                                 |
 | `npm run db:seed`     | Add demo data to an empty database.                                 |
-| `npm run db:studio`   | Browse the database with Drizzle Studio.                            |
 
 ## Project layout
 

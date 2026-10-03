@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Geist } from "next/font/google";
 import { SetupRequired } from "@/components/setup-required";
 import { SiteFooter, SiteHeader } from "@/components/site-header";
 import { getDatabaseMode } from "@/db";
@@ -11,11 +11,6 @@ export const dynamic = "force-dynamic";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
   subsets: ["latin"],
 });
 
@@ -33,11 +28,8 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
   const user = configured ? await getCurrentUser() : null;
 
   return (
-    <html
-      lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
-    >
-      <body className="flex min-h-full flex-col font-sans">
+    <html lang="en" className={`${geistSans.variable} h-full antialiased`}>
+      <body className="flex min-h-full flex-col">
         <a
           href="#main"
           className="sr-only z-50 rounded-full bg-brand text-brand-ink focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:px-4 focus:py-2"

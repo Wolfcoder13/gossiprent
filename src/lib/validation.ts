@@ -20,7 +20,7 @@ const email = z
 const checkbox = z
   .string()
   .optional()
-  .transform((value) => value === "on" || value === "true");
+  .transform((value) => value === "on");
 
 const name = z
   .string()
@@ -123,7 +123,7 @@ export const propertySchema = z.object({
     .transform((value) => value || null),
 });
 
-export type FieldErrors = Partial<Record<string, string[]>>;
+type FieldErrors = Partial<Record<string, string[]>>;
 
 /** Shared shape returned by every form Server Action. */
 export type FormState = {

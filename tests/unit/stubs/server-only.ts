@@ -1,2 +1,2 @@
-// Empty stand-in for the "server-only" package in unit tests (see vitest.config.ts).
+// Empty stand-in for `server-only` (which Next.js provides) in unit tests (see vitest.config.mts).
 export {};

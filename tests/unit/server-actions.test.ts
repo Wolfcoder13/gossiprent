@@ -24,7 +24,7 @@ const testDb = await vi.hoisted(async () => {
   // These tests play the part of a reverse proxy that sets X-Real-IP /
   // X-Forwarded-For, so trust those headers (see clientIp).
   process.env.TRUST_PROXY_HEADERS = "true";
-  return { root, postgres: Boolean(process.env.UNIT_DATABASE_URL) };
+  return { root };
 });
 
 /** One fake "browser": its request headers and cookie jar. */
@@ -65,15 +65,12 @@ vi.mock("next/navigation", () => ({
   redirect: (url: string) => {
     throw new RedirectSignal(url);
   },
-  notFound: () => {
-    throw new Error("notFound()");
-  },
 }));
 
-vi.mock("next/cache", () => ({ revalidatePath: vi.fn(), revalidateTag: vi.fn() }));
+vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 
 import fs from "node:fs";
-import { and, eq, like } from "drizzle-orm";
+import { eq, like } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { changePassword, deleteAccount, signOutOtherDevices } from "@/app/actions/account";
 import { login, signup } from "@/app/actions/auth";
@@ -131,8 +128,8 @@ function form(fields: Record<string, string>): FormData {
   return data;
 }
 
-type Roles = "landlord" | "renter" | "both";
-type CreatedUser = { id: string; email: string; password: string; roles: Roles; name: string };
+type Roles = "landlord" | "renter";
+type CreatedUser = { id: string; email: string; password: string; name: string };
 
 /** Insert a user directly (fast; skips the signup action and its rate limit). */
 async function createUser(roles: Roles = "renter"): Promise<CreatedUser> {
@@ -152,7 +149,7 @@ async function createUser(roles: Roles = "renter"): Promise<CreatedUser> {
       city: "Testville",
     })
     .returning({ id: users.id });
-  return { id: row.id, email, password, roles, name };
+  return { id: row.id, email, password, name };
 }
 
 /** Run an action that's expected to redirect; returns where it redirected to. */
@@ -972,7 +969,7 @@ describe("deleteAccount", () => {
     expect(await landlordOf(addedByThem)).toBeNull();
     expect(await landlordOf(addedByRenter)).toBeNull();
     expect(await landlordOf(someoneElses)).toBe(otherLandlord.id);
-    expect(revalidatePath).toHaveBeenCalledWith("/properties");
+    expect(revalidatePath).toHaveBeenCalledWith("/", "layout");
     // The listings and their reviews stay.
     const db = await getDb();
     expect(await db.select({ id: reviews.id }).from(reviews).where(eq(reviews.propertyId, addedByRenter))).toEqual([
@@ -1185,11 +1182,5 @@ describe("unlinkProperty", () => {
     await logInAs(right);
     expect(await claimProperty(idleFormState, form({ propertyId }))).toEqual({ status: "success", message: CLAIMED });
     expect(await landlordOf(propertyId)).toBe(right.id);
-    const db = await getDb();
-    const [row] = await db
-      .select({ id: properties.id })
-      .from(properties)
-      .where(and(eq(properties.id, propertyId), eq(properties.landlordId, right.id)));
-    expect(row?.id).toBe(propertyId);
   });
 });

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-// "@/db" imports "server-only" (stubbed in vitest.config.ts); nothing here opens a connection.
-import { DatabaseNotConfiguredError, getDatabaseMode, pgErrorCode } from "@/db";
-import { connect, getDatabaseUrl } from "@/db/connect";
+// "@/db" imports "server-only" (stubbed in vitest.config.mts); nothing here opens a connection.
+import { getDatabaseMode, pgErrorCode } from "@/db";
+import { connect, DatabaseNotConfiguredError, getDatabaseUrl } from "@/db/connect";
 
 describe("pgErrorCode", () => {
   it("reads the Postgres error code from the error itself", () => {

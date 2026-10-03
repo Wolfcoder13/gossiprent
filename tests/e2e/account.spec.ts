@@ -22,7 +22,7 @@ import {
 
 const NO_LANDLORD = "The landlord for this property isn't on GossipRent yet.";
 const CLAIMED = "Done. You're now listed as this property's landlord.";
-const CLOSED_NOTICE_TEXT = "Your account is closed and the reviews you wrote have been deleted.";
+const CLOSED_NOTICE = "Your account is closed and the reviews you wrote have been deleted.";
 
 test.describe("profile", () => {
   test("updating name, city, and bio changes the public profile", async ({ page }) => {
@@ -123,8 +123,6 @@ test.describe("profile", () => {
 });
 
 test.describe("closing an account", () => {
-  const CLOSED_NOTICE = "Your account is closed and the reviews you wrote have been deleted.";
-
   test("the dashboard explains what closing does", async ({ page }) => {
     await signUp(page, makeUser("renter"));
     const section = page.locator("section").filter({ has: page.getByRole("heading", { name: "Close account" }) });
@@ -185,7 +183,7 @@ test.describe("closing an account", () => {
     await expect(page.getByRole("heading", { name: "Close account" })).toBeVisible();
     await clickAndConfirm(page, page.getByRole("button", { name: "Close my account" }));
     await expect(page).toHaveURL(/\/\?account=deleted$/);
-    await expect(page.getByRole("main").getByRole("status")).toHaveText(CLOSED_NOTICE);
+    await expect(formStatus(page)).toHaveText(CLOSED_NOTICE);
     await expect(page.getByRole("banner").getByRole("link", { name: "Log in" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Log out" })).toHaveCount(0);
 
@@ -281,7 +279,7 @@ test.describe("closing an account", () => {
     await page.goto("/dashboard");
     await clickAndConfirm(page, page.getByRole("button", { name: "Close my account" }));
     await expect(page).toHaveURL(/\/\?account=deleted$/);
-    await expect(page.getByRole("main").getByRole("status")).toHaveText(CLOSED_NOTICE);
+    await expect(formStatus(page)).toHaveText(CLOSED_NOTICE);
 
     expect((await page.goto(renterPath))?.status()).toBe(404);
     await page.goto(`/renters?q=${encodeURIComponent(user.name)}`);
@@ -387,7 +385,7 @@ test.describe("closing a landlord account that has properties", () => {
     for (const path of [propertyPath, linkedPath]) {
       await page.goto(path);
       await page.getByRole("button", { name: "I manage this property" }).click();
-      await expect(page.getByRole("main").getByRole("status")).toHaveText(CLAIMED);
+      await expect(formStatus(page)).toHaveText(CLAIMED);
       await expect(page.getByText(`Landlord: ${manager.name}`)).toBeVisible();
       await expect(page.getByRole("button", { name: "Not my property" })).toBeVisible();
     }
@@ -401,11 +399,11 @@ test.describe("closing a landlord account that has properties", () => {
 test.describe("the account-closed notice", () => {
   test("only shows to signed-out visitors", async ({ page }) => {
     await page.goto("/?account=deleted");
-    await expect(page.getByRole("main").getByRole("status")).toHaveText(CLOSED_NOTICE_TEXT);
+    await expect(formStatus(page)).toHaveText(CLOSED_NOTICE);
     // Someone signed in (e.g. following an old link) isn't told their account is closed.
     await signUp(page, makeUser("renter"));
     await page.goto("/?account=deleted");
     await expect(page.getByRole("heading", { level: 1 }).first()).toBeVisible();
-    await expect(page.getByText(CLOSED_NOTICE_TEXT)).toHaveCount(0);
+    await expect(page.getByText(CLOSED_NOTICE)).toHaveCount(0);
   });
 });

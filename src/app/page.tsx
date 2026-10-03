@@ -115,11 +115,9 @@ export default async function HomePage({ searchParams }: PageProps<"/">) {
       </section>
 
       <section aria-labelledby="recent-heading" className="mt-16">
-        <div className="flex items-end justify-between gap-4">
-          <h2 id="recent-heading" className="text-2xl font-bold tracking-tight text-ink">
-            Latest reviews
-          </h2>
-        </div>
+        <h2 id="recent-heading" className="text-2xl font-bold tracking-tight text-ink">
+          Latest reviews
+        </h2>
         <div className="mt-6">
           {recent.length > 0 ? (
             <ReviewList reviews={recent} viewerId={user?.id} showSubject />

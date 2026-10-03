@@ -1,24 +1,19 @@
 "use client";
 
 import { useEffect, useId, useRef, useState } from "react";
+import { STAR_PATH } from "./stars";
 import { cx } from "./ui";
 
 const LABELS = ["", "Terrible", "Poor", "Okay", "Good", "Excellent"];
-const STAR_PATH =
-  "M12 2.5l2.94 6.11 6.56.84-4.82 4.6 1.2 6.55L12 17.4l-5.88 3.2 1.2-6.55-4.82-4.6 6.56-.84L12 2.5z";
 
 /**
  * Accessible 1–5 star picker built on native radio buttons, so it works with
  * the keyboard (arrow keys), screen readers, and plain form submission.
  */
 export function StarInput({
-  name = "rating",
-  label = "Your rating",
   defaultValue,
   error,
 }: {
-  name?: string;
-  label?: string;
   defaultValue?: number;
   error?: string[];
 }) {
@@ -44,7 +39,7 @@ export function StarInput({
       aria-describedby={error?.length ? errorId : undefined}
       aria-invalid={error?.length ? true : undefined}
     >
-      <legend className="text-sm font-medium text-ink">{label}</legend>
+      <legend className="text-sm font-medium text-ink">Your rating</legend>
       <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
         <div className="flex" onMouseLeave={() => setHover(0)}>
           {[1, 2, 3, 4, 5].map((n) => (
@@ -55,7 +50,7 @@ export function StarInput({
             >
               <input
                 type="radio"
-                name={name}
+                name="rating"
                 value={n}
                 defaultChecked={initial === n}
                 onChange={() => setValue(n)}

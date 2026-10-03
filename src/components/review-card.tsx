@@ -6,19 +6,16 @@ import { DeleteReviewButton } from "./delete-review-button";
 import { Stars } from "./stars";
 import { Avatar, cx, RoleBadge } from "./ui";
 
-export function ReviewCard({
+function ReviewCard({
   review,
   viewerId,
   showSubject = false,
-  editHref,
 }: {
   review: ReviewItem;
   /** The signed-in user, so their own reviews get edit/delete controls. */
   viewerId?: string;
   /** Show what the review is about (for feeds that mix subjects). */
   showSubject?: boolean;
-  /** Where "Edit" goes for the viewer's own review. Defaults to the subject's page. */
-  editHref?: string;
 }) {
   const isMine = viewerId === review.author.id;
   const edited = review.updatedAt.getTime() - review.createdAt.getTime() > 60_000;
@@ -78,7 +75,7 @@ export function ReviewCard({
         <footer className="mt-4 flex items-center gap-2 border-t border-line pt-3">
           {/* A plain anchor (not next/link) so keyboard focus moves to the form too. */}
           <a
-            href={editHref ?? `${subjectHref}#your-review`}
+            href={`${subjectHref}#your-review`}
             className="rounded-full px-3 py-1 text-xs font-semibold text-brand hover:bg-brand-soft"
           >
             Edit

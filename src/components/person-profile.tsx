@@ -68,7 +68,7 @@ export async function PersonProfile({
     hash: "reviews",
   });
   const isSelf = viewer?.id === id;
-  const reviewerNoun = role === "landlord" ? "renters" : "landlords";
+  const reviewerNoun = `${reviewerRole(role)}s`;
   // Renters review landlords and landlords review renters.
   const mayReview = !isSelf && (!viewer || hasRole(viewer, reviewerRole(role)));
 

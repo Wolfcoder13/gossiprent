@@ -48,11 +48,6 @@ describe("a brand-new database", () => {
     }
   });
 
-  it("has no leftovers from the single-role design", async () => {
-    const { rows } = await client.query("select 1 from pg_type where typname = 'user_role'");
-    expect(rows).toEqual([]);
-  });
-
   it("refuses an account with neither role", async () => {
     expect(
       await errorCode(

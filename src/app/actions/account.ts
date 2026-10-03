@@ -9,7 +9,6 @@ import { getCurrentUser } from "@/lib/auth/current-user";
 import { hashPassword, verifyPassword } from "@/lib/auth/password";
 import { consumeAttempt, RATE_LIMITS } from "@/lib/auth/rate-limit";
 import { deleteOtherSessions, deleteSession } from "@/lib/auth/session";
-import { profilePath } from "@/lib/paths";
 import {
   parseForm,
   passwordChangeSchema,
@@ -31,7 +30,6 @@ export async function updateProfile(_prev: FormState, formData: FormData): Promi
   await db.update(users).set({ name, city, bio }).where(eq(users.id, user.id));
 
   revalidatePath("/", "layout");
-  revalidatePath(profilePath(user));
   return {
     status: "success",
     message: "Profile saved.",
@@ -54,7 +52,6 @@ export async function changeRole(_prev: FormState, formData: FormData): Promise<
   if (!parsed.success) return { status: "error", message: "Something went wrong. Please try again." };
   const { role, change } = parsed.data;
   const flag = role === "landlord" ? "isLandlord" : "isRenter";
-  const label = role === "landlord" ? "landlord" : "renter";
 
   const db = await getDb();
   if (change === "add") {
@@ -80,7 +77,7 @@ export async function changeRole(_prev: FormState, formData: FormData): Promise<
         .from(reviews)
         .where(and(eq(reviews.subjectUserId, user.id), eq(reviews.kind, role)))
         .limit(1);
-      if (reviewed) return `People have reviewed you as a ${label}, so you can't remove that role.`;
+      if (reviewed) return `People have reviewed you as a ${role}, so you can't remove that role.`;
       if (role === "landlord") {
         await tx.update(properties).set({ landlordId: null }).where(eq(properties.landlordId, user.id));
       }
@@ -96,8 +93,8 @@ export async function changeRole(_prev: FormState, formData: FormData): Promise<
     status: "success",
     message:
       change === "add"
-        ? `Done. You're now listed as a ${label} too.`
-        : `Done. You're no longer listed as a ${label}.`,
+        ? `Done. You're now listed as a ${role} too.`
+        : `Done. You're no longer listed as a ${role}.`,
     // Came here from a review form? Offer the way back.
     link: change === "add" && next ? { href: next, label: "Back to write your review" } : undefined,
   };
@@ -203,6 +200,5 @@ export async function deleteAccount(formData: FormData): Promise<void> {
   });
 
   revalidatePath("/", "layout");
-  revalidatePath("/properties");
   redirect("/?account=deleted");
 }

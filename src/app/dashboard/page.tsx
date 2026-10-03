@@ -12,9 +12,8 @@ import {
   listReviewsByAuthor,
   listReviewsOfLandlordProperties,
 } from "@/lib/data";
-import type { UserRole } from "@/db/schema";
 import { profilePath } from "@/lib/paths";
-import { rolesOf } from "@/lib/roles";
+import { reviewerRole, rolesOf } from "@/lib/roles";
 import { safeRedirectPath } from "@/lib/validation";
 import { DeleteAccount } from "./delete-account";
 import { PasswordForm, SignOutOthersForm } from "./password-form";
@@ -27,8 +26,6 @@ const ABOUT_ME_SHOWN = 20;
 const PROPERTY_REVIEWS_SHOWN = 20;
 const WRITTEN_SHOWN = 50;
 const PROPERTIES_SHOWN = 60;
-
-const REVIEWED_BY: Record<UserRole, string> = { landlord: "renters", renter: "landlords" };
 
 function ShowingNote({
   shown,
@@ -158,7 +155,7 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
                   />
                 </>
               ) : (
-                <EmptyState title={`No ${REVIEWED_BY[role]} have reviewed you yet`}>
+                <EmptyState title={`No ${reviewerRole(role)}s have reviewed you yet`}>
                   {role === "landlord"
                     ? "When your renters review you, it'll show up here. Share your profile link with them!"
                     : "When your landlords review you, it'll show up here."}

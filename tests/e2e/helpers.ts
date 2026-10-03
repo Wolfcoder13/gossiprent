@@ -6,25 +6,25 @@ export const DEMO_PASSWORD = "password123";
 /** Seeded demo data (src/db/seed.ts) that browsing tests rely on. */
 export const DEMO = {
   landlords: {
-    maria: { name: "Maria Gonzalez", email: "maria@example.com", city: "Austin, TX" },
-    northgate: { name: "Northgate Property Group", email: "office@northgate.example.com", city: "Chicago, IL" },
-    sam: { name: "Sam Whitfield", email: "sam@example.com", city: "Portland, OR" },
-    priya: { name: "Priya Raman", email: "priya@example.com", city: "Denver, CO" },
+    maria: { name: "Maria Gonzalez", email: "maria@example.com" },
+    northgate: { name: "Northgate Property Group", email: "office@northgate.example.com" },
+    sam: { name: "Sam Whitfield", email: "sam@example.com" },
+    priya: { name: "Priya Raman", email: "priya@example.com" },
   },
   renters: {
-    jordan: { name: "Jordan Ellis", email: "jordan@example.com", city: "Austin, TX" },
-    aisha: { name: "Aisha Bello", email: "aisha@example.com", city: "Chicago, IL" },
-    tom: { name: "Tom Becker", email: "tom@example.com", city: "Portland, OR" },
-    lena: { name: "Lena Kowalski", email: "lena@example.com", city: "Chicago, IL" },
-    marcus: { name: "Marcus Reed", email: "marcus@example.com", city: "Denver, CO" },
+    jordan: { name: "Jordan Ellis", email: "jordan@example.com" },
+    aisha: { name: "Aisha Bello", email: "aisha@example.com" },
+    tom: { name: "Tom Becker", email: "tom@example.com" },
+    lena: { name: "Lena Kowalski", email: "lena@example.com" },
+    marcus: { name: "Marcus Reed", email: "marcus@example.com" },
   },
 } as const;
 
-export type Role = "landlord" | "renter";
+type Role = "landlord" | "renter";
 /** What an account signs up as: one role, or both. */
-export type Roles = Role | "both";
+type Roles = Role | "both";
 
-export type TestUser = {
+type TestUser = {
   role: Roles;
   name: string;
   email: string;
@@ -55,7 +55,7 @@ export function makeUser(role: Roles, overrides: Partial<TestUser> = {}): TestUs
   };
 }
 
-export const ROLE_CHECKBOX: Record<Role, string> = { renter: "I'm a renter", landlord: "I'm a landlord" };
+const ROLE_CHECKBOX: Record<Role, string> = { renter: "I'm a renter", landlord: "I'm a landlord" };
 
 /** The sign-up form's "I'm a renter" / "I'm a landlord" checkbox. */
 export function roleCheckbox(page: Page, role: Role): Locator {
@@ -63,7 +63,7 @@ export function roleCheckbox(page: Page, role: Role): Locator {
 }
 
 /** Tick exactly the sign-up checkboxes for `roles` (and untick the other one). */
-export async function pickRoles(page: Page, roles: Roles): Promise<void> {
+async function pickRoles(page: Page, roles: Roles): Promise<void> {
   for (const role of ["renter", "landlord"] as const) {
     const wanted = roles === "both" || roles === role;
     await roleCheckbox(page, role).setChecked(wanted);
@@ -134,7 +134,7 @@ export function otherRolePath(path: string): string {
   return path.startsWith("/landlords/") ? path.replace("/landlords/", "/renters/") : path.replace("/renters/", "/landlords/");
 }
 
-export type Actor = {
+type Actor = {
   user: TestUser;
   context: BrowserContext;
   page: Page;
@@ -209,6 +209,44 @@ export async function fillReview(
   await reviewBodyInput(page).fill(review.body);
 }
 
+type Review = { stars: number; title: string; body: string };
+
+/** A review with a unique title and body. */
+export function makeReview(stars: number, overrides: Partial<Review> = {}): Review {
+  const id = uid();
+  return {
+    stars,
+    title: `Headline ${id}`,
+    body: `Review body ${id}: responsive, fair, and the deposit came back in full.`,
+    ...overrides,
+  };
+}
+
+/** Write a review on the subject page `path` and wait for it to be saved. */
+export async function postReview(page: Page, path: string, review: Review): Promise<void> {
+  await page.goto(path);
+  await fillReview(page, review);
+  await page.getByRole("button", { name: "Post review" }).click();
+  await expect(formStatus(page)).toHaveText("Thanks! Your review is live.");
+  await expect(reviewCard(page, review.title)).toBeVisible();
+}
+
+/** The big average number in the rating summary. */
+export function summaryAverage(page: Page): Locator {
+  return page.locator("p.text-5xl");
+}
+
+/** The "N reviews" line under the big average on a profile/property page. */
+export function summaryCount(page: Page): Locator {
+  return page.locator("p").filter({ hasText: /^(\d+ reviews?|No reviews yet)$/ }).first();
+}
+
+/** The number shown in one of the home page's stat tiles. */
+export async function homeStat(page: Page, label: string): Promise<number> {
+  const tile = page.locator("dl > div").filter({ has: page.locator("dt", { hasText: label }) });
+  return Number((await tile.locator("dd").innerText()).replace(/,/g, ""));
+}
+
 /**
  * A directory card's meta line, item by item: role badge, property count,
  * "· Also a …", "· Account closed".
@@ -241,7 +279,7 @@ export async function clickAndCancel(page: Page, button: Locator): Promise<void>
 // Properties
 // ---------------------------------------------------------------------------
 
-export type NewProperty = {
+type NewProperty = {
   address: string;
   unit?: string;
   city: string;
@@ -275,9 +313,9 @@ export function propertyLabel(p: NewProperty): string {
  * - { relation: "rent", landlord? }: "Rent or used to rent", then optionally
  *   pick the landlord (people with both roles).
  */
-export type PropertyOwner = string | { relation: "own" } | { relation: "rent"; landlord?: string };
+type PropertyOwner = string | { relation: "own" } | { relation: "rent"; landlord?: string };
 
-export const RELATION_LABEL = { own: "Own or manage", rent: "Rent or used to rent" } as const;
+const RELATION_LABEL = { own: "Own or manage", rent: "Rent or used to rent" } as const;
 
 /** The "This is a place I…" radio group shown to people with both roles. */
 export function relationGroup(page: Page): Locator {

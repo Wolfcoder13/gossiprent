@@ -19,7 +19,7 @@ type FieldProps = {
 };
 
 /** Label + control + hint + error, wired up with ids for screen readers. */
-export function Field({ label, name, error, hint, required, children }: FieldProps) {
+function Field({ label, name, error, hint, required, children }: FieldProps) {
   const id = useId();
   const inputId = `${name}-${id}`;
   const hintId = hint ? `${inputId}-hint` : undefined;
@@ -49,7 +49,7 @@ export function Field({ label, name, error, hint, required, children }: FieldPro
 type InputProps = {
   label: string;
   name: string;
-  type?: "text" | "email" | "password" | "search";
+  type?: "text" | "email" | "password";
   defaultValue?: string;
   error?: string[];
   hint?: ReactNode;
@@ -85,9 +85,9 @@ export function TextArea({
   error,
   hint,
   required,
-  rows = 5,
+  rows,
   ...rest
-}: Omit<InputProps, "type" | "autoComplete"> & { rows?: number }) {
+}: Omit<InputProps, "type" | "autoComplete"> & { rows: number }) {
   return (
     <Field label={label} name={name} error={error} hint={hint} required={required}>
       {({ inputId, describedBy, invalid }) => (
@@ -111,7 +111,6 @@ export function Select({
   name,
   error,
   hint,
-  required,
   defaultValue,
   children,
 }: {
@@ -119,17 +118,15 @@ export function Select({
   name: string;
   error?: string[];
   hint?: ReactNode;
-  required?: boolean;
   defaultValue?: string;
   children: ReactNode;
 }) {
   return (
-    <Field label={label} name={name} error={error} hint={hint} required={required}>
+    <Field label={label} name={name} error={error} hint={hint}>
       {({ inputId, describedBy, invalid }) => (
         <select
           id={inputId}
           name={name}
-          required={required}
           defaultValue={defaultValue}
           aria-invalid={invalid || undefined}
           aria-describedby={describedBy}
@@ -150,7 +147,7 @@ export function SubmitButton({
   className,
 }: {
   children: ReactNode;
-  pendingLabel?: ReactNode;
+  pendingLabel: ReactNode;
   variant?: "primary" | "secondary" | "danger";
   className?: string;
 }) {
@@ -165,7 +162,7 @@ export function SubmitButton({
       }}
       className={cx(buttonStyles.base, buttonStyles[variant], "px-5 py-2.5", className)}
     >
-      {pending ? (pendingLabel ?? "Saving…") : children}
+      {pending ? pendingLabel : children}
     </button>
   );
 }

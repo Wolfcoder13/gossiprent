@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-// data.ts imports "server-only" (stubbed in vitest.config.ts) and the database
+// data.ts imports "server-only" (stubbed in vitest.config.mts) and the database
 // module. Importing it must not open a database connection.
 import {
   isUuid,

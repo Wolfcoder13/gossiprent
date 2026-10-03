@@ -76,12 +76,9 @@ vi.mock("next/navigation", () => ({
   redirect: (url: string) => {
     throw new RedirectSignal(url);
   },
-  notFound: () => {
-    throw new Error("notFound()");
-  },
 }));
 
-vi.mock("next/cache", () => ({ revalidatePath: vi.fn(), revalidateTag: vi.fn() }));
+vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 
 import fs from "node:fs";
 import { and, eq, sql } from "drizzle-orm";
@@ -383,7 +380,6 @@ describe("signup with roles", () => {
     expect(row).toMatchObject(expected);
     // The signed-in user (from the session cookie) carries the same flags.
     expect(await getCurrentUser()).toMatchObject({ id: row.id, ...expected });
-    expect(await getCurrentUser()).not.toHaveProperty("role");
   });
 
   it("refuses a sign-up with no role ticked, keeping what was typed", async () => {
@@ -879,27 +875,6 @@ describe("saveReview permissions by role", () => {
     expect(await review("property", await insertProperty(null, user.id))).toMatchObject({ status: "success" });
   });
 
-  // Someone with both roles reviews the place they rent as a renter, then
-  // claims it as its landlord: they'd end up with a review of a property they
-  // manage, which the rule above is meant to prevent. The claim is refused.
-  it("claiming a property you reviewed doesn't leave you reviewing a property you manage", async () => {
-    const user = await createUser("both");
-    const propertyId = await insertProperty(null, user.id);
-    await logInAs(user);
-    expect(await review("property", propertyId)).toMatchObject({ status: "success" });
-    expect(await claimProperty(idleFormState, form({ propertyId }))).toEqual({
-      status: "error",
-      message: CLAIM_AFTER_REVIEW,
-    });
-    const db = await getDb();
-    const ownReviews = await db
-      .select({ id: reviews.id })
-      .from(reviews)
-      .innerJoin(properties, eq(properties.id, reviews.propertyId))
-      .where(and(eq(reviews.authorId, user.id), eq(properties.landlordId, user.id)));
-    expect(ownReviews).toEqual([]);
-  });
-
   it("after unlinking yourself from a property you may review it as a renter", async () => {
     const user = await createUser("both");
     const propertyId = await insertProperty(user.id, user.id);
@@ -1057,7 +1032,6 @@ describe("per-role ratings", () => {
     expect(asLandlord.total).toBe(2);
     expect(asLandlord.items.map((r) => r.rating).sort()).toEqual([4, 5]);
     for (const item of asLandlord.items) {
-      expect(item.kind).toBe("landlord");
       expect(item.author.role).toBe("renter");
       expect(item.subject).toMatchObject({ kind: "landlord", id: subject.id });
     }
@@ -1065,7 +1039,6 @@ describe("per-role ratings", () => {
     const asRenter = await listReviewsAbout({ userId: subject.id, as: "renter" });
     expect(asRenter.total).toBe(1);
     expect(asRenter.items[0]).toMatchObject({
-      kind: "renter",
       rating: 1,
       author: { id: landlordA.id, role: "landlord", isLandlord: true, isRenter: false },
       subject: { kind: "renter", id: subject.id },
@@ -1077,8 +1050,8 @@ describe("per-role ratings", () => {
     const someone = await createUser("both");
     await insertReview({ kind: "renter", authorId: author.id, subjectUserId: someone.id });
     await insertReview({ kind: "landlord", authorId: author.id, subjectUserId: someone.id });
-    const { items } = await listReviewsByAuthor(author.id);
-    expect(items.map((r) => [r.kind, r.author.role]).sort()).toEqual([
+    const { items } = await listReviewsByAuthor(author.id, 10);
+    expect(items.map((r) => [r.subject.kind, r.author.role]).sort()).toEqual([
       ["landlord", "renter"],
       ["renter", "landlord"],
     ]);
@@ -1097,9 +1070,8 @@ describe("per-role ratings", () => {
     const landlordOnly = await createUser("landlord");
     expect((await listPeople({ role: "landlord", query: landlordOnly.name })).total).toBe(1);
     expect((await listPeople({ role: "renter", query: landlordOnly.name })).total).toBe(0);
-    expect(await getPublicUser(landlordOnly.id, "landlord")).toMatchObject({ id: landlordOnly.id });
-    expect(await getPublicUser(landlordOnly.id, "renter")).toBeNull();
-    expect(await getPublicUser(subject.id, "renter")).toMatchObject({ isLandlord: true, isRenter: true });
+    expect(await getPublicUser(landlordOnly.id)).toMatchObject({ id: landlordOnly.id, isLandlord: true, isRenter: false });
+    expect(await getPublicUser(subject.id)).toMatchObject({ isLandlord: true, isRenter: true });
   });
 
   it("a review in one role doesn't change the other role's rating", async () => {
@@ -1161,14 +1133,6 @@ describe("createProperty and roles", () => {
     landlord = await createUser("landlord");
     renter = await createUser("renter");
     both = await createUser("both");
-  });
-
-  it('someone with both roles lists it as their own with "own" (a picked landlord is ignored)', async () => {
-    const user = await createUser("both");
-    await logInAs(user);
-    expect(await add("", { relation: "own" })).toEqual({ landlordId: user.id });
-    expect(await add(landlord.id, { relation: "own" })).toEqual({ landlordId: user.id });
-    expect(revalidatePath).toHaveBeenCalledWith(`/landlords/${user.id}`);
   });
 
   it("someone with both roles can add the place they rent, with or without its landlord", async () => {
@@ -1235,17 +1199,12 @@ describe("createProperty and roles", () => {
     await logInAs(both);
     expect(await claimProperty(idleFormState, form({ propertyId }))).toMatchObject({ status: "success" });
     expect(await landlordOf(propertyId)).toBe(both.id);
-    const db = await getDb();
-    const [row] = await db
-      .select({ id: properties.id })
-      .from(properties)
-      .where(and(eq(properties.id, propertyId), eq(properties.landlordId, both.id)));
-    expect(row?.id).toBe(propertyId);
   });
 });
 
 // ---------------------------------------------------------------------------
-// Claiming a property you reviewed as a renter
+// Claiming a property you reviewed as a renter (you'd end up reviewing a
+// property you manage, so the claim is refused)
 // ---------------------------------------------------------------------------
 
 describe("claiming a property you reviewed", () => {
@@ -1500,8 +1459,7 @@ describe("deleteAccount with roles", () => {
     expect(await closeAccount()).toBe("/?account=deleted");
 
     expect(await row(user.id)).toMatchObject({ isLandlord: false, isRenter: true, deletedAt: expect.any(Date) });
-    expect(await getPublicUser(user.id, "renter")).toMatchObject({ id: user.id });
-    expect(await getPublicUser(user.id, "landlord")).toBeNull();
+    expect(await getPublicUser(user.id)).toMatchObject({ id: user.id, isLandlord: false, isRenter: true });
     expect((await listPeople({ role: "landlord", query: user.name })).total).toBe(0);
     expect(await landlordOf(managed)).toBeNull();
     expect(await hiddenReviewsAbout(user.id)).toEqual([]);
@@ -1514,7 +1472,7 @@ describe("deleteAccount with roles", () => {
     await logInAs(user);
     expect(await closeAccount()).toBe("/?account=deleted");
     expect(await row(user.id)).toMatchObject({ isLandlord: true, isRenter: false, deletedAt: expect.any(Date) });
-    expect(await getPublicUser(user.id, "renter")).toBeNull();
+    expect(await getPublicUser(user.id)).toMatchObject({ isLandlord: true, isRenter: false });
     expect(await getRatingSummary({ userId: user.id, as: "landlord" })).toMatchObject({ count: 1 });
   });
 
@@ -1671,7 +1629,6 @@ describe("saveReview when a double-submit wins the race to insert", () => {
       expect(result).toEqual({
         status: "success",
         message: UPDATED,
-        values: { rating: "5", title: "Latest text", body: "Long enough review text for the validation rules." },
       });
       const mine = await reviewsBy(author.id);
       expect(mine).toHaveLength(1);

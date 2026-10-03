@@ -32,7 +32,7 @@ export const REVIEWS_PAGE_SIZE = 10;
 // ---------------------------------------------------------------------------
 
 /** Everything about a user that's safe to show publicly (never the email). */
-export type PublicUser = {
+type PublicUser = {
   id: string;
   name: string;
   isLandlord: boolean;
@@ -71,17 +71,12 @@ export type PropertyListItem = {
   reviewCount: number;
 };
 
-export type PropertyDetail = Omit<PropertyListItem, "average" | "reviewCount"> & {
-  createdById: string | null;
-};
+type PropertyDetail = Omit<PropertyListItem, "average" | "reviewCount">;
 
-export type ReviewSubject =
-  | { kind: "landlord" | "renter"; id: string; name: string }
-  | { kind: "property"; id: string; name: string };
+type ReviewSubject = { kind: ReviewKind; id: string; name: string };
 
 export type ReviewItem = {
   id: string;
-  kind: ReviewKind;
   rating: number;
   title: string;
   body: string;
@@ -92,7 +87,7 @@ export type ReviewItem = {
   subject: ReviewSubject;
 };
 
-export type Paginated<T> = {
+type Paginated<T> = {
   items: T[];
   total: number;
   page: number;
@@ -103,12 +98,11 @@ export type Paginated<T> = {
  * Who/what a set of reviews is about. For a person, `as` says which role:
  * someone who's both a landlord and a renter has separate ratings for each.
  */
-export type ReviewTarget = { userId: string; as: UserRole } | { propertyId: string };
+type ReviewTarget = { userId: string; as: UserRole } | { propertyId: string };
 
 const roleColumn = (role: UserRole) => (role === "landlord" ? users.isLandlord : users.isRenter);
 
 export type PersonSort = "top" | "most" | "newest" | "name";
-export type PropertySort = PersonSort;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -199,14 +193,10 @@ export function propertyLabel(p: { address: string; unit: string | null }): stri
 
 // Memoized per request: generateMetadata and the page both ask for the same row.
 export const getPublicUser = cache(
-  async (id: string, role?: UserRole): Promise<PublicUser | null> => {
+  async (id: string): Promise<PublicUser | null> => {
     if (!isUuid(id)) return null;
     const db = await getDb();
-    const [user] = await db
-      .select(publicUserColumns)
-      .from(users)
-      .where(role ? and(eq(users.id, id), eq(roleColumn(role), true)) : eq(users.id, id))
-      .limit(1);
+    const [user] = await db.select(publicUserColumns).from(users).where(eq(users.id, id)).limit(1);
     return user ?? null;
   },
 );
@@ -267,7 +257,7 @@ const landlordUser = alias(users, "landlord_user");
 
 export async function listProperties(options: {
   query?: string;
-  sort?: PropertySort;
+  sort?: PersonSort;
   page?: number;
   pageSize?: number;
   landlordId?: string;
@@ -358,7 +348,6 @@ export const getProperty = cache(async (id: string): Promise<PropertyDetail | nu
       postalCode: properties.postalCode,
       description: properties.description,
       createdAt: properties.createdAt,
-      createdById: properties.createdById,
       landlordId: landlordUser.id,
       landlordName: landlordUser.name,
     })
@@ -454,7 +443,6 @@ async function queryReviews(options: {
 
   return rows.map((row) => ({
     id: row.id,
-    kind: row.kind,
     rating: row.rating,
     title: row.title,
     body: row.body,
@@ -490,11 +478,9 @@ export async function getRatingSummary(target: ReviewTarget): Promise<RatingSumm
   let total = 0;
   let sum = 0;
   for (const row of rows) {
-    if (row.rating >= 1 && row.rating <= 5) {
-      distribution[row.rating - 1] = row.count;
-      total += row.count;
-      sum += row.rating * row.count;
-    }
+    distribution[row.rating - 1] = row.count;
+    total += row.count;
+    sum += row.rating * row.count;
   }
   return {
     average: total > 0 ? Math.round((sum / total) * 100) / 100 : null,
@@ -520,7 +506,7 @@ export async function listReviewsAbout(
 /** The most recent reviews of any property this landlord manages, plus the total. */
 export async function listReviewsOfLandlordProperties(
   landlordId: string,
-  limit = 50,
+  limit: number,
 ): Promise<{ items: ReviewItem[]; total: number }> {
   const db = await getDb();
   const [items, [{ total }]] = await Promise.all([
@@ -537,7 +523,7 @@ export async function listReviewsOfLandlordProperties(
 /** The most recent reviews this person wrote, plus the total. */
 export async function listReviewsByAuthor(
   authorId: string,
-  limit = 100,
+  limit: number,
 ): Promise<{ items: ReviewItem[]; total: number }> {
   const db = await getDb();
   const [items, [{ total }]] = await Promise.all([
@@ -547,7 +533,7 @@ export async function listReviewsByAuthor(
   return { items, total };
 }
 
-export async function listRecentReviews(limit = 6): Promise<ReviewItem[]> {
+export async function listRecentReviews(limit: number): Promise<ReviewItem[]> {
   return queryReviews({ where: undefined, limit });
 }
 

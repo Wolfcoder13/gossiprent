@@ -25,10 +25,6 @@ describe("rolesOf", () => {
     expect(rolesOf(BOTH)).toEqual(["landlord", "renter"]);
     expect(rolesOf(NEITHER)).toEqual([]);
   });
-
-  it("only reads the role flags", () => {
-    expect(rolesOf({ ...RENTER, role: "landlord" } as typeof RENTER)).toEqual(["renter"]);
-  });
 });
 
 describe("primaryRole", () => {

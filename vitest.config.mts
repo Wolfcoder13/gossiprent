@@ -6,8 +6,8 @@ const fromRoot = (relative: string) => fileURLToPath(new URL(relative, import.me
 export default defineConfig({
   resolve: {
     alias: [
-      // `server-only` throws when imported outside a React Server Component
-      // bundle. Unit tests import server modules directly, so stub it out.
+      // Next.js supplies `server-only` itself (the npm package isn't installed);
+      // unit tests import server modules directly, so stub it.
       { find: /^server-only$/, replacement: fromRoot("./tests/unit/stubs/server-only.ts") },
       // Same "@/..." path alias as tsconfig.json.
       { find: /^@\//, replacement: fromRoot("./src/") },
@@ -15,6 +15,5 @@ export default defineConfig({
   },
   test: {
     include: ["tests/unit/**/*.test.ts"],
-    environment: "node",
   },
 });

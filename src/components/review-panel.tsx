@@ -3,15 +3,9 @@ import type { ReactNode } from "react";
 import type { ReviewKind } from "@/db/schema";
 import type { SessionUser } from "@/lib/auth/current-user";
 import type { ReviewItem } from "@/lib/data";
-import { hasRole } from "@/lib/roles";
+import { hasRole, reviewerRole as reviewerRoleFor } from "@/lib/roles";
 import { ReviewForm } from "./review-form";
 import { ButtonLink, Card } from "./ui";
-
-const WHO_CAN_REVIEW: Record<ReviewKind, "renter" | "landlord"> = {
-  landlord: "renter",
-  renter: "landlord",
-  property: "renter",
-};
 
 const INVITE: Record<ReviewKind, string> = {
   landlord: "Rented from {name}?",
@@ -43,7 +37,7 @@ export function ReviewPanel({
   /** Shown instead of the form when the viewer is the subject (or owns the property). */
   ownerNote?: string;
 }) {
-  const reviewerRole = WHO_CAN_REVIEW[kind];
+  const reviewerRole = reviewerRoleFor(kind);
   const invite = INVITE[kind].replace("{name}", subjectName);
   const next = encodeURIComponent(returnTo);
 
@@ -94,7 +88,7 @@ export function ReviewPanel({
           {existing ? (
             <>You can update your review any time. It&apos;s shown publicly with your name.</>
           ) : (
-            <>Your review is public and shows your name. One review per {kind === "property" ? "property" : kind}.</>
+            <>Your review is public and shows your name. One review per {kind}.</>
           )}
         </p>
         <div className="mt-5">

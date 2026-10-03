@@ -8,7 +8,7 @@ export function cx(...classes: (string | false | null | undefined)[]): string {
 }
 
 export const buttonStyles = {
-  base: "inline-flex items-center justify-center gap-2 rounded-full px-4 py-2 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60 aria-disabled:cursor-wait aria-disabled:opacity-60",
+  base: "inline-flex items-center justify-center gap-2 rounded-full px-4 py-2 text-sm font-semibold transition-colors aria-disabled:cursor-wait aria-disabled:opacity-60",
   primary: "bg-brand text-brand-ink hover:bg-brand-hover",
   secondary: "border border-line-strong bg-surface text-ink hover:bg-surface-muted",
   ghost: "text-ink hover:bg-surface-muted",
@@ -28,19 +28,9 @@ export function ButtonLink({
   );
 }
 
-export function Card({
-  className,
-  children,
-  as: Tag = "div",
-}: {
-  className?: string;
-  children: ReactNode;
-  as?: "div" | "section" | "article" | "li";
-}) {
+export function Card({ children, as: Tag = "div" }: { children: ReactNode; as?: "div" | "section" }) {
   return (
-    <Tag className={cx("rounded-2xl border border-line bg-surface p-5 shadow-sm sm:p-6", className)}>
-      {children}
-    </Tag>
+    <Tag className="rounded-2xl border border-line bg-surface p-5 shadow-sm sm:p-6">{children}</Tag>
   );
 }
 
@@ -56,13 +46,12 @@ const ROLE_LABELS: Record<UserRole | "property", string> = {
   property: "Property",
 };
 
-export function RoleBadge({ role, className }: { role: UserRole | "property"; className?: string }) {
+export function RoleBadge({ role }: { role: UserRole | "property" }) {
   return (
     <span
       className={cx(
         "inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold",
         ROLE_STYLES[role],
-        className,
       )}
     >
       {ROLE_LABELS[role]}
@@ -154,14 +143,13 @@ export function PageHeader({
 }
 
 export function Notice({
-  tone = "info",
+  tone,
   children,
 }: {
-  tone?: "info" | "success" | "error";
+  tone: "success" | "error";
   children: ReactNode;
 }) {
   const tones = {
-    info: "border-line bg-surface-muted text-ink",
     success: "border-success/30 bg-success-soft text-success",
     error: "border-danger/30 bg-danger-soft text-danger",
   };

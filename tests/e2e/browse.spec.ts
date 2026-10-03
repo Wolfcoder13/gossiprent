@@ -5,18 +5,14 @@ import {
   DEMO_PASSWORD,
   findPersonPath,
   findPropertyPath,
+  homeStat,
   logIn,
   makeUser,
   myProfilePath,
   signUp,
+  summaryCount,
   uid,
 } from "./helpers";
-
-/** The number shown in one of the home page's stat tiles. */
-async function homeStat(page: Page, label: string): Promise<number> {
-  const tile = page.locator("dl > div").filter({ has: page.locator("dt", { hasText: label }) });
-  return Number((await tile.locator("dd").innerText()).replace(/,/g, ""));
-}
 
 /** The "N things" total shown above a directory listing. */
 async function directoryTotal(page: Page, path: string, noun: RegExp): Promise<number> {
@@ -27,16 +23,11 @@ async function directoryTotal(page: Page, path: string, noun: RegExp): Promise<n
   return Number(match![1].replace(/,/g, ""));
 }
 
-/** Names on the person cards of the current directory page, in order. */
+/** Names on the cards of the current directory page, in order. */
 async function cardNames(page: Page): Promise<string[]> {
   return page.locator("main ul > li > a").evaluateAll((links) =>
     links.map((a) => a.querySelector("p")?.textContent?.trim() ?? ""),
   );
-}
-
-/** The "N reviews" line under the big average on a profile/property page. */
-function summaryCount(page: Page) {
-  return page.locator("p").filter({ hasText: /^(\d+ reviews?|No reviews yet)$/ }).first();
 }
 
 function notFoundHeading(page: Page) {
@@ -433,6 +424,7 @@ test.describe("profile pages", () => {
       `/login?next=${next}`,
     );
     await expect(page.getByRole("button", { name: "Post review" })).toHaveCount(0);
+    await expect(page.getByRole("radio")).toHaveCount(0);
   });
 
   test("landlord profile averages several reviews", async ({ page }) => {
@@ -648,10 +640,7 @@ test.describe("A–Z sorting", () => {
     }
     await page.goto(`/properties?q=${token}&sort=name`);
     await expect(page.getByText(`4 properties matching “${token}”`)).toBeVisible();
-    const labels = await page
-      .locator("main ul > li > a")
-      .evaluateAll((links) => links.map((a) => a.querySelector("p")?.textContent?.trim() ?? ""));
-    expect(labels).toEqual([`alpha ${token} Rd`, `Bravo ${token} Rd`, `Charlie ${token} Rd`, `delta ${token} Rd`]);
+    expect(await cardNames(page)).toEqual([`alpha ${token} Rd`, `Bravo ${token} Rd`, `Charlie ${token} Rd`, `delta ${token} Rd`]);
   });
 });
 

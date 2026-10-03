@@ -154,7 +154,6 @@ export async function saveReview(_prev: FormState, formData: FormData): Promise<
   return {
     status: "success",
     message: result.updated ? "Your review was updated." : "Thanks! Your review is live.",
-    values: { rating: String(rating), title, body },
   };
 }
 

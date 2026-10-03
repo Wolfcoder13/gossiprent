@@ -10,9 +10,9 @@ export type Database = NodePgDatabase<typeof schema>;
 /** The `tx` handed to a `db.transaction(async (tx) => …)` callback. */
 export type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 
-export type DatabaseMode = "postgres" | "pglite" | "unconfigured";
+type DatabaseMode = "postgres" | "pglite" | "unconfigured";
 
-export const MIGRATIONS_FOLDER = path.join(process.cwd(), "drizzle");
+const MIGRATIONS_FOLDER = path.join(process.cwd(), "drizzle");
 
 /** Connection string for a hosted Postgres (Neon, Supabase, Vercel Postgres…). */
 export function getDatabaseUrl(): string | undefined {
@@ -60,7 +60,7 @@ export async function closeDatabase(db: Database): Promise<void> {
 function connectPostgres(connectionString: string): Database {
   const pool = new Pool({
     connectionString,
-    max: Number(process.env.DATABASE_POOL_MAX) || 5,
+    max: 5,
     idleTimeoutMillis: 10_000,
     // Fail fast (instead of hanging the request) if the database is unreachable.
     connectionTimeoutMillis: 10_000,

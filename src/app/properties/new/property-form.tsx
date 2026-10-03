@@ -22,7 +22,7 @@ export function PropertyForm({
   isLandlord: boolean;
   isRenter: boolean;
   landlords: { id: string; name: string; city: string | null }[];
-  /** Preselects "own" when coming from "Your properties" (?as=landlord). */
+  /** Preselected own/rent choice, from ?as=landlord or ?as=renter (dashboard links). */
   defaultRelation?: "own" | "rent";
 }) {
   const [state, formAction] = useActionState(createProperty, idleFormState);

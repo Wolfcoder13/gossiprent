@@ -4,7 +4,7 @@ import type { SessionUser } from "@/lib/auth/current-user";
 import { NavLinks } from "./nav-links";
 import { Avatar, buttonStyles, ButtonLink, cx } from "./ui";
 
-export function Logo() {
+function Logo() {
   return (
     <Link href="/" className="flex items-center gap-2 font-bold tracking-tight text-ink">
       <span

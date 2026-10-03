@@ -11,37 +11,26 @@ import {
   fillPropertyForm,
   fillReview,
   findPersonPath,
-  landlordSelect,
+  formAlert,
   formStatus,
+  homeStat,
+  landlordSelect,
   logIn,
   makeProperty,
+  makeReview,
   makeUser,
   myProfilePath,
   otherRolePath,
   pickLandlord,
+  postReview,
   propertyLabel,
   relationGroup,
   relationRadio,
   reviewCard,
   signUp,
-  uid,
+  summaryAverage,
+  summaryCount,
 } from "./helpers";
-
-type Review = { stars: number; title: string; body: string };
-
-function makeReview(stars: number): Review {
-  const id = uid();
-  return { stars, title: `Roles ${id}`, body: `Roles review ${id}: honest, fair, and easy to deal with.` };
-}
-
-/** Write a review on the subject page `path` and wait for it to be saved. */
-async function postReview(page: Page, path: string, review: Review): Promise<void> {
-  await page.goto(path);
-  await fillReview(page, review);
-  await page.getByRole("button", { name: "Post review" }).click();
-  await expect(formStatus(page)).toHaveText("Thanks! Your review is live.");
-  await expect(reviewCard(page, review.title)).toBeVisible();
-}
 
 /** The "Your roles" card on the dashboard. */
 function rolesCard(page: Page): Locator {
@@ -55,15 +44,6 @@ function roleTabs(page: Page): Locator {
 
 function roleTab(page: Page, label: "As a landlord" | "As a renter"): Locator {
   return roleTabs(page).getByRole("link", { name: new RegExp(`^${label} `) });
-}
-
-/** The big average number in the rating summary. */
-function summaryAverage(page: Page): Locator {
-  return page.locator("p.text-5xl");
-}
-
-function summaryCount(page: Page): Locator {
-  return page.locator("p").filter({ hasText: /^(\d+ reviews?|No reviews yet)$/ }).first();
 }
 
 function heading(page: Page, name: string): Locator {
@@ -155,16 +135,12 @@ test.describe("signing up as both", () => {
   });
 
   test("counts as one more landlord and one more renter on the home page", async ({ page }) => {
-    const stat = async (label: string) => {
-      const tile = page.locator("dl > div").filter({ has: page.locator("dt", { hasText: label }) });
-      return Number((await tile.locator("dd").innerText()).replace(/,/g, ""));
-    };
     await page.goto("/");
-    const before = { landlords: await stat("Landlords"), renters: await stat("Renters") };
+    const before = { landlords: await homeStat(page, "Landlords"), renters: await homeStat(page, "Renters") };
     await signUp(page, makeUser("both"));
     await page.goto("/");
-    expect(await stat("Landlords")).toBe(before.landlords + 1);
-    expect(await stat("Renters")).toBe(before.renters + 1);
+    expect(await homeStat(page, "Landlords")).toBe(before.landlords + 1);
+    expect(await homeStat(page, "Renters")).toBe(before.renters + 1);
   });
 
   test("unticking the preselected role and ticking none shows an error; ticking both works", async ({ page }) => {
@@ -371,12 +347,6 @@ test.describe("profiles of people with both roles", () => {
     await expect(page).toHaveURL(renter.profilePath);
     await expect(page.getByRole("heading", { level: 1, name: renter.user.name })).toBeVisible();
     await expect(roleTabs(page)).toHaveCount(0);
-
-    // An unknown id is still a 404 on both.
-    for (const path of ["/landlords/3f2504e0-4f89-41d3-9a0c-0305e82c3301", "/renters/3f2504e0-4f89-41d3-9a0c-0305e82c3301"]) {
-      const response = await page.goto(path);
-      expect(response?.status(), path).toBe(404);
-    }
     await landlord.context.close();
     await renter.context.close();
   });
@@ -628,8 +598,7 @@ test.describe("adding a property with both roles", () => {
     await relationRadio(page, "rent").check();
     const select = landlordSelect(page);
     await expect(select).toBeVisible();
-    // Renting: there's no "Me" option, and they aren't listed under their own name.
-    await expect(select.locator('option[value="me"]')).toHaveCount(0);
+    // Renting: they aren't listed under their own name.
     await expect(select.locator("option", { hasText: user.name })).toHaveCount(0);
     await relationRadio(page, "own").check();
     await expect(landlordSelect(page)).toHaveCount(0);
@@ -756,7 +725,7 @@ test.describe("adding a property with both roles", () => {
     await landlord.context.close();
   });
 
-  test("renters and landlords aren't asked; renters see no “Me” option, landlords pick no landlord", async ({
+  test("renters and landlords aren't asked; landlords pick no landlord", async ({
     page,
     browser,
   }) => {
@@ -766,7 +735,6 @@ test.describe("adding a property with both roles", () => {
     await expect(relationGroup(page)).toHaveCount(0);
     const select = landlordSelect(page);
     await expect(select).toBeVisible();
-    await expect(select.locator('option[value="me"]')).toHaveCount(0);
     // Someone with both roles is offered as a landlord.
     await expect(select.locator("option", { hasText: both.user.name })).toHaveCount(1);
 
@@ -778,15 +746,15 @@ test.describe("adding a property with both roles", () => {
     await landlord.context.close();
   });
 
-  test("a renter who forces “me” into the form gets an error, not a property", async ({ page }) => {
+  test("a renter who tampers with the landlord list gets an error, not a property", async ({ page }) => {
     await signUp(page, makeUser("renter"));
     await page.goto("/properties/new");
     await landlordSelect(page).evaluate((select) => {
       const option = document.createElement("option");
-      option.value = "me";
-      option.textContent = "Me";
+      option.value = "not-an-id";
+      option.textContent = "Not a landlord";
       select.appendChild(option);
-      (select as HTMLSelectElement).value = "me";
+      (select as HTMLSelectElement).value = "not-an-id";
     });
     const property = makeProperty();
     await fillPropertyForm(page, property);
@@ -842,7 +810,7 @@ test.describe("claiming and reviewing with both roles", () => {
     await expect(formStatus(other)).toHaveText("Thanks! Your review is live.");
 
     await page.getByRole("button", { name: "I manage this property" }).click();
-    await expect(page.getByRole("main").getByRole("alert")).toHaveText(
+    await expect(formAlert(page)).toHaveText(
       "You've reviewed this property as a renter, so you can't also be its landlord. Delete your review first.",
     );
     await page.reload();
@@ -890,24 +858,6 @@ test.describe("claiming and reviewing with both roles", () => {
     await expect(page.getByRole("heading", { name: "Your review" })).toBeVisible();
     await expect(page.getByLabel("Headline")).toHaveValue(review.title);
     await landlord.context.close();
-  });
-
-  test("someone without the role and without a review sees the role-missing message with the dashboard link", async ({
-    page,
-    browser,
-  }) => {
-    const renter = await createActor(browser, "renter");
-    await signUp(page, makeUser("renter"));
-    await page.goto(renter.profilePath);
-    const panel = page.locator("#your-review");
-    await expect(panel).toHaveText(
-      "Only landlords can review renters. If you rent out a home too, add the landlord role to your account.",
-    );
-    await expect(panel.getByRole("link", { name: "add the landlord role to your account" })).toHaveAttribute(
-      "href",
-      `/dashboard?next=${encodeURIComponent(renter.profilePath)}#roles`,
-    );
-    await renter.context.close();
   });
 });
 

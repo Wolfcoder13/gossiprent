@@ -33,8 +33,7 @@ process.env.E2E_PGLITE_DATA_DIR ??= path.join(
 export default defineConfig({
   testDir: "./tests/e2e",
   // All tests share one server and one embedded database (a single connection),
-  // and a few assertions compare site-wide counts, so run them one at a time.
-  fullyParallel: false,
+  // and a few assertions compare site-wide counts, so use a single worker.
   workers: 1,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 1 : 0,
@@ -55,10 +54,8 @@ export default defineConfig({
   webServer: {
     command: `npx next start -p ${port}`,
     url: baseURL,
-    reuseExistingServer: false,
     timeout: 120_000,
     stdout: "pipe",
-    stderr: "pipe",
     env: {
       PGLITE_DATA_DIR: process.env.E2E_PGLITE_DATA_DIR,
       SEED_DEMO_DATA: "true",

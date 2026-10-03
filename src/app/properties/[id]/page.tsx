@@ -49,7 +49,7 @@ export default async function PropertyPage({ params, searchParams }: PageProps<"
   const isOwner = Boolean(viewer && property.landlord?.id === viewer.id);
   // Landlords can't review their own properties, so someone who reviewed this
   // one can't claim it either.
-  const canClaim = Boolean(viewer?.isLandlord) && !property.landlord && !myReview;
+  const canClaim = !property.landlord && !myReview;
   const mayReview = !isOwner && (!viewer || viewer.isRenter);
 
   return (

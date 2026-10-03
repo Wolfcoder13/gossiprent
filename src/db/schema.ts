@@ -12,8 +12,6 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 
-export const USER_ROLES = ["landlord", "renter"] as const;
-
 /**
  * What a review is about:
  * - "landlord": a renter reviewing a landlord (subjectUserId is set)
@@ -172,8 +170,5 @@ export const authAttempts = pgTable(
   (t) => [index("auth_attempts_key_created_at_idx").on(t.key, t.createdAt)],
 );
 
-export type UserRole = (typeof USER_ROLES)[number];
+export type UserRole = "landlord" | "renter";
 export type ReviewKind = (typeof reviewKind.enumValues)[number];
-export type User = typeof users.$inferSelect;
-export type Property = typeof properties.$inferSelect;
-export type Review = typeof reviews.$inferSelect;

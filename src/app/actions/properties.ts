@@ -121,11 +121,11 @@ export async function createProperty(_prev: FormState, formData: FormData): Prom
   redirect(`/properties/${propertyId}`);
 }
 
-function revalidatePropertyPages(propertyId: string, landlordIds: (string | null)[]) {
+function revalidatePropertyPages(propertyId: string, landlordId: string) {
   revalidatePath(`/properties/${propertyId}`);
   revalidatePath("/properties");
   revalidatePath("/dashboard");
-  for (const id of landlordIds) if (id) revalidatePath(`/landlords/${id}`);
+  revalidatePath(`/landlords/${landlordId}`);
 }
 
 const CLAIM_MESSAGES = {
@@ -179,7 +179,7 @@ export async function claimProperty(_prev: FormState, formData: FormData): Promi
     return "claimed" as const;
   });
   // Refresh even when refused, so the page shows who manages it now.
-  if (outcome !== "missing") revalidatePropertyPages(propertyId, [user.id]);
+  if (outcome !== "missing") revalidatePropertyPages(propertyId, user.id);
   return CLAIM_MESSAGES[outcome];
 }
 
@@ -200,7 +200,7 @@ export async function unlinkProperty(_prev: FormState, formData: FormData): Prom
     .set({ landlordId: null })
     .where(and(eq(properties.id, propertyId), eq(properties.landlordId, user.id)))
     .returning({ id: properties.id });
-  revalidatePropertyPages(propertyId, [user.id]);
+  revalidatePropertyPages(propertyId, user.id);
   return unlinked.length > 0
     ? { status: "success", message: "Done. You're no longer listed as this property's landlord." }
     : { status: "error", message: "You aren't listed as this property's landlord." };

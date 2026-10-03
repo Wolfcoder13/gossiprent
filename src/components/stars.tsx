@@ -1,12 +1,11 @@
 import { cx } from "./ui";
 
-const STAR_PATH =
+export const STAR_PATH =
   "M12 2.5l2.94 6.11 6.56.84-4.82 4.6 1.2 6.55L12 17.4l-5.88 3.2 1.2-6.55-4.82-4.6 6.56-.84L12 2.5z";
 
 const SIZES = {
   sm: "size-4",
   md: "size-5",
-  lg: "size-7",
 };
 
 function StarRow({ className, size }: { className: string; size: keyof typeof SIZES }) {
@@ -51,18 +50,10 @@ export function formatRating(rating: number | null): string {
 }
 
 /** Stars plus "4.3 · 12 reviews". */
-export function RatingInline({
-  average,
-  count,
-  size = "sm",
-}: {
-  average: number | null;
-  count: number;
-  size?: keyof typeof SIZES;
-}) {
+export function RatingInline({ average, count }: { average: number | null; count: number }) {
   return (
     <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
-      <Stars rating={average} size={size} />
+      <Stars rating={average} size="sm" />
       {count > 0 ? (
         <span className="text-muted">
           <span className="font-semibold text-ink">{formatRating(average)}</span> ·{" "}

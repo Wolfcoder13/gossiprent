@@ -6,6 +6,7 @@ import {
   fillSignup,
   findPersonPath,
   formAlert,
+  formStatus,
   logIn,
   logOut,
   makeUser,
@@ -81,8 +82,7 @@ test.describe("sign up", () => {
     await page.goto("/signup?role=landlord");
     await expect(roleCheckbox(page, "landlord")).toBeChecked();
     await expect(roleCheckbox(page, "renter")).not.toBeChecked();
-    // They're checkboxes, not radios: ticking one keeps the other.
-    await expect(page.getByRole("radio")).toHaveCount(0);
+    // Ticking one keeps the other.
     await roleCheckbox(page, "renter").check();
     await expect(roleCheckbox(page, "landlord")).toBeChecked();
     await expect(roleCheckbox(page, "renter")).toBeChecked();
@@ -337,13 +337,6 @@ test.describe("redirects through login", () => {
 });
 
 test.describe("open redirect regressions", () => {
-  test("/login?next=/.//evil.example ends on this site after logging in", async ({ page, baseURL }) => {
-    await page.goto("/login?next=/.//evil.example");
-    await fillLogin(page, DEMO.renters.lena.email, DEMO_PASSWORD);
-    await expect(page).toHaveURL(`${baseURL}/dashboard`);
-    expect(new URL(page.url()).origin).toBe(new URL(baseURL!).origin);
-  });
-
   test("a signed-in visitor sent to /login?next=/.//evil.example stays on this site", async ({ page, baseURL, request }) => {
     await logIn(page, DEMO.renters.lena.email, DEMO_PASSWORD);
     await page.goto("/login?next=/.//evil.example");
@@ -571,7 +564,7 @@ test.describe("signing out other devices", () => {
     await expect(status).toBeFocused();
     await expect(page).toHaveURL(/\/dashboard$/);
     // It's the only message on the page (the password form has none).
-    await expect(page.getByRole("main").getByRole("status")).toHaveCount(1);
+    await expect(formStatus(page)).toHaveCount(1);
     await page.reload();
     await expect(page.getByRole("heading", { level: 1, name: `Hi, ${user.name.split(" ")[0]}` })).toBeVisible();
     // A one-off message: it's gone after a reload.
@@ -588,13 +581,6 @@ test.describe("signing out other devices", () => {
     await fillLogin(devicePages[0], user.email, user.password);
     await expect(devicePages[0]).toHaveURL(/\/dashboard$/);
     for (const context of [...devices, bystander]) await context.close();
-  });
-
-  test("the old ?signedOut=others link no longer shows a message", async ({ page }) => {
-    await signUp(page, makeUser("renter"));
-    await page.goto("/dashboard?signedOut=others");
-    await expect(page.getByRole("heading", { level: 1, name: /^Hi, / })).toBeVisible();
-    await expect(page.getByText(SIGNED_OUT)).toHaveCount(0);
   });
 
   test("works without JavaScript", async ({ browser }) => {

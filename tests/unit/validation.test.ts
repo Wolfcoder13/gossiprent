@@ -66,8 +66,6 @@ describe("signupSchema", () => {
     ["renter only", { isRenter: "on" }, { isRenter: true, isLandlord: false }],
     ["landlord only", { isLandlord: "on" }, { isRenter: false, isLandlord: true }],
     ["both", { isRenter: "on", isLandlord: "on" }, { isRenter: true, isLandlord: true }],
-    // `value="true"` (e.g. a hidden input or a script) counts as ticked too.
-    ["both, sent as true", { isRenter: "true", isLandlord: "true" }, { isRenter: true, isLandlord: true }],
   ])("accepts %s", (_label, roles, expected) => {
     const rest: Partial<typeof valid> = { ...valid };
     delete rest.isRenter;
@@ -80,7 +78,6 @@ describe("signupSchema", () => {
     ["unticked-looking values", { isRenter: "off", isLandlord: "false" }],
     ["other strings", { isRenter: "yes", isLandlord: "1" }],
     ["a different casing", { isRenter: "ON", isLandlord: "True" }],
-    ["the old single-role field", { role: "renter" }],
   ])("asks for at least one role when given %s", (_label, roles) => {
     const rest: Partial<typeof valid> = { ...valid };
     delete rest.isRenter;
@@ -373,16 +370,6 @@ describe("propertySchema", () => {
 
   it("rejects a landlord id that isn't a UUID", () => {
     expect(fieldErrors(propertySchema, { ...valid, landlordId: "maria" }).landlordId).toEqual([
-      "Choose a landlord from the list.",
-    ]);
-  });
-
-  it('rejects "me" as a landlord (only "" or a landlord\'s id)', () => {
-    expect(propertySchema.safeParse({ ...valid, landlordId: "me" }).success).toBe(false);
-  });
-
-  it.each([["Me"], ["ME"], [" me"], ["myself"], ["self"]])("rejects landlord %j", (landlordId) => {
-    expect(fieldErrors(propertySchema, { ...valid, landlordId }).landlordId).toEqual([
       "Choose a landlord from the list.",
     ]);
   });

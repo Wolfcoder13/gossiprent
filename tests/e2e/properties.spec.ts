@@ -9,9 +9,12 @@ import {
   findPropertyPath,
   logIn,
   fillPropertyForm,
+  fillReview,
   formAlert,
+  formStatus,
   makeProperty,
   makeUser,
+  myProfilePath,
   propertyLabel,
   signUp,
   uid,
@@ -280,11 +283,6 @@ const CLAIMED = "Done. You're now listed as this property's landlord.";
 const UNLINKED = "Done. You're no longer listed as this property's landlord.";
 const ALREADY_MANAGED = "Another landlord already manages this property.";
 
-/** The result message of the claim/unlink form. */
-function landlordActionStatus(page: Page): Locator {
-  return page.getByRole("main").getByRole("status");
-}
-
 test.describe("claiming and unlinking a property", () => {
 
   test("a landlord claims a property a renter listed without a landlord", async ({ page, browser }) => {
@@ -293,23 +291,21 @@ test.describe("claiming and unlinking a property", () => {
     const label = propertyLabel(property);
     const path = await addProperty(renter.page, property);
     const review = `Before the claim ${uid()}`;
-    await renter.page.getByLabel("Headline").fill(review);
-    await renter.page.locator("label").filter({ has: renter.page.getByRole("radio", { name: /^4 stars/ }) }).click();
-    await renter.page.getByLabel("Your review", { exact: true }).fill("Nice flat, the landlord never answered though.");
+    await fillReview(renter.page, { stars: 4, title: review, body: "Nice flat, the landlord never answered though." });
     await renter.page.getByRole("button", { name: "Post review" }).click();
     await expect(renter.page.locator("article").filter({ hasText: review })).toBeVisible();
 
     const landlord = makeUser("landlord");
     await signUp(page, landlord);
-    const landlordPath = (await page.getByRole("link", { name: "View public profile" }).getAttribute("href"))!;
+    const landlordPath = await myProfilePath(page);
     await page.goto(path);
     await expect(page.getByText(NO_LANDLORD)).toBeVisible();
     await expect(page.getByRole("button", { name: UNLINK })).toHaveCount(0);
     await page.getByRole("button", { name: CLAIM }).click();
 
     // The result is announced and gets keyboard focus, even though the button was swapped.
-    await expect(landlordActionStatus(page)).toHaveText(CLAIMED);
-    await expect(landlordActionStatus(page)).toBeFocused();
+    await expect(formStatus(page)).toHaveText(CLAIMED);
+    await expect(formStatus(page)).toBeFocused();
     await expect(page.getByText(`Landlord: ${landlord.name}`)).toBeVisible();
     await expect(page.getByRole("link", { name: landlord.name })).toHaveAttribute("href", landlordPath);
     await expect(page.getByRole("button", { name: CLAIM })).toHaveCount(0);
@@ -367,23 +363,19 @@ test.describe("claiming and unlinking a property", () => {
     await first.page.getByRole("button", { name: CLAIM }).click();
     await expect(first.page.getByText(`Landlord: ${first.user.name}`)).toBeVisible();
     await second.page.getByRole("button", { name: CLAIM }).click();
-    const refused = second.page.getByRole("main").getByRole("alert");
+    const refused = formAlert(second.page);
     await expect(refused).toHaveText(ALREADY_MANAGED);
     await expect(refused).toBeFocused();
-    return { first, second, renter, path };
+    return { first, second, renter };
   }
 
-  test("two landlords claiming at the same time: the first one wins", async ({ browser }) => {
+  test("a refused claim updates the page to show who manages it; the first claim wins", async ({ browser }) => {
     const { first, second, renter } = await claimRace(browser);
-    await second.page.reload();
     await expect(second.page.getByText(`Landlord: ${first.user.name}`)).toBeVisible();
     await expect(second.page.getByRole("button", { name: CLAIM })).toHaveCount(0);
     await expect(second.page.getByRole("button", { name: UNLINK })).toHaveCount(0);
-    for (const actor of [first, second, renter]) await actor.context.close();
-  });
-
-  test("a refused claim updates the page to show who manages it", async ({ browser }) => {
-    const { first, second, renter } = await claimRace(browser);
+    // A fresh load agrees.
+    await second.page.reload();
     await expect(second.page.getByText(`Landlord: ${first.user.name}`)).toBeVisible();
     await expect(second.page.getByRole("button", { name: CLAIM })).toHaveCount(0);
     await expect(second.page.getByRole("button", { name: UNLINK })).toHaveCount(0);
@@ -394,7 +386,7 @@ test.describe("claiming and unlinking a property", () => {
     const renter = await createActor(browser, "renter");
     const landlord = makeUser("landlord");
     await signUp(page, landlord);
-    const landlordPath = (await page.getByRole("link", { name: "View public profile" }).getAttribute("href"))!;
+    const landlordPath = await myProfilePath(page);
 
     // A renter links this landlord to a property by mistake.
     const property = makeProperty();
@@ -410,7 +402,7 @@ test.describe("claiming and unlinking a property", () => {
 
     // Dismissing the confirmation changes nothing.
     await clickAndCancel(page, unlink);
-    await expect(landlordActionStatus(page)).toHaveCount(0);
+    await expect(formStatus(page)).toHaveCount(0);
     await page.reload();
     await expect(page.getByText(`Landlord: ${landlord.name}`)).toBeVisible();
 
@@ -420,8 +412,8 @@ test.describe("claiming and unlinking a property", () => {
       void dialog.accept();
     });
     await page.getByRole("button", { name: UNLINK }).click();
-    await expect(landlordActionStatus(page)).toHaveText(UNLINKED);
-    await expect(landlordActionStatus(page)).toBeFocused();
+    await expect(formStatus(page)).toHaveText(UNLINKED);
+    await expect(formStatus(page)).toBeFocused();
     await expect(page.getByText(NO_LANDLORD)).toBeVisible();
     expect(message).toBe(
       "Remove yourself as the landlord of this property? The listing and its reviews stay on GossipRent.",
@@ -447,19 +439,18 @@ test.describe("claiming and unlinking a property", () => {
   test("a landlord can unlink a property they added themselves, and claim it back", async ({ page }) => {
     const landlord = makeUser("landlord");
     await signUp(page, landlord);
-    const path = await addProperty(page, makeProperty());
+    await addProperty(page, makeProperty());
     await clickAndConfirm(page, page.getByRole("button", { name: UNLINK }));
-    await expect(landlordActionStatus(page)).toHaveText(UNLINKED);
+    await expect(formStatus(page)).toHaveText(UNLINKED);
     await expect(page.getByText(NO_LANDLORD)).toBeVisible();
     // Changed their mind: the message follows the latest action.
     await page.getByRole("button", { name: CLAIM }).click();
-    await expect(landlordActionStatus(page)).toHaveText(CLAIMED);
+    await expect(formStatus(page)).toHaveText(CLAIMED);
     await expect(page.getByText(`Landlord: ${landlord.name}`)).toBeVisible();
     await clickAndConfirm(page, page.getByRole("button", { name: UNLINK }));
-    await expect(landlordActionStatus(page)).toHaveText(UNLINKED);
+    await expect(formStatus(page)).toHaveText(UNLINKED);
     await page.goto("/dashboard");
     await expect(page.getByRole("heading", { name: "Your properties (0)", exact: true })).toBeVisible();
-    expect(path).toMatch(/^\/properties\//);
   });
 
   test("renters and signed-out visitors see neither button", async ({ page, browser }) => {
@@ -516,7 +507,7 @@ test.describe("claiming without JavaScript", () => {
     await noJsPage.goto(path);
     await noJsPage.getByRole("button", { name: CLAIM }).click();
     await expect(noJsPage.getByText(`Landlord: ${landlord.name}`)).toBeVisible();
-    await expect(noJsPage.getByRole("main").getByRole("status")).toHaveText(CLAIMED);
+    await expect(formStatus(noJsPage)).toHaveText(CLAIMED);
 
     await noJsPage.getByRole("button", { name: UNLINK }).click();
     await expect(noJsPage.getByText(NO_LANDLORD)).toBeVisible();
@@ -561,7 +552,7 @@ test.describe("the claim row on a narrow phone (320px wide)", () => {
     expect(result.inPage, "before claiming: page").toBeLessThanOrEqual(0);
 
     await claim.click();
-    await expect(landlordActionStatus(page)).toHaveText(CLAIMED);
+    await expect(formStatus(page)).toHaveText(CLAIMED);
     const unlink = page.getByRole("button", { name: UNLINK });
     await expect(unlink).toBeVisible();
     await expect(row).toContainText(`Landlord: ${landlord.name}`);
@@ -570,7 +561,7 @@ test.describe("the claim row on a narrow phone (320px wide)", () => {
     expect(result.inRow, "after claiming: row").toBeLessThanOrEqual(0.5);
     expect(result.inPage, "after claiming: page").toBeLessThanOrEqual(0);
     await expect(unlink).toBeInViewport({ ratio: 1 });
-    await expect(landlordActionStatus(page)).toBeInViewport({ ratio: 1 });
+    await expect(formStatus(page)).toBeInViewport({ ratio: 1 });
 
     // A fresh page load (no message) too.
     await page.reload();

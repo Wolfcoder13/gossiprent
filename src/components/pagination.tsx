@@ -52,7 +52,7 @@ export function Pagination({
         </span>
       )}
       <span className="text-sm text-muted">
-        Page {Math.min(page, pageCount)} of {pageCount}
+        Page {page} of {pageCount}
       </span>
       {page < pageCount ? (
         <Link href={href(page + 1)} className={linkClass} rel="next">

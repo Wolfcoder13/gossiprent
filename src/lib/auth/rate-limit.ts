@@ -47,7 +47,7 @@ export async function clientIp(): Promise<string | null> {
   );
 }
 
-export type Attempt = {
+type Attempt = {
   /** True if this attempt went over at least one limit (and was not counted). */
   limited: boolean;
   /** Un-count this attempt, e.g. after a successful login. */

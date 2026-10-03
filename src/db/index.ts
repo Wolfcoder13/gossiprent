@@ -1,12 +1,7 @@
 import "server-only";
 import { connect, type Database } from "./connect";
 
-export {
-  DatabaseNotConfiguredError,
-  getDatabaseMode,
-  type Database,
-  type Transaction,
-} from "./connect";
+export { getDatabaseMode, type Transaction } from "./connect";
 
 // Kept on globalThis so dev-mode hot reloads reuse one pool / one embedded
 // database instead of opening a new one on every edit.
