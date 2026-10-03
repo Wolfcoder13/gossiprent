@@ -1,9 +1,64 @@
 {
-  "id": "cc3afdc0-d22b-4726-9416-294006416c68",
+  "id": "ffd03f08-a270-4e78-b9a4-4614149fec00",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
+    "public.auth_attempts": {
+      "name": "auth_attempts",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "key": {
+          "name": "key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "auth_attempts_key_created_at_idx": {
+          "name": "auth_attempts_key_created_at_idx",
+          "columns": [
+            {
+              "expression": "key",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.properties": {
       "name": "properties",
       "schema": "",
@@ -240,8 +295,8 @@
         }
       },
       "indexes": {
-        "reviews_author_subject_user_unique": {
-          "name": "reviews_author_subject_user_unique",
+        "reviews_author_subject_user_kind_unique": {
+          "name": "reviews_author_subject_user_kind_unique",
           "columns": [
             {
               "expression": "author_id",
@@ -251,6 +306,12 @@
             },
             {
               "expression": "subject_user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "kind",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -520,12 +581,19 @@
           "primaryKey": false,
           "notNull": true
         },
-        "role": {
-          "name": "role",
-          "type": "user_role",
-          "typeSchema": "public",
+        "is_landlord": {
+          "name": "is_landlord",
+          "type": "boolean",
           "primaryKey": false,
-          "notNull": true
+          "notNull": true,
+          "default": false
+        },
+        "is_renter": {
+          "name": "is_renter",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
         },
         "city": {
           "name": "city",
@@ -545,6 +613,12 @@
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
+        },
+        "deleted_at": {
+          "name": "deleted_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -563,17 +637,34 @@
           "method": "btree",
           "with": {}
         },
-        "users_role_idx": {
-          "name": "users_role_idx",
+        "users_is_landlord_idx": {
+          "name": "users_is_landlord_idx",
           "columns": [
             {
-              "expression": "role",
+              "expression": "is_landlord",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
             }
           ],
           "isUnique": false,
+          "where": "\"users\".\"is_landlord\"",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "users_is_renter_idx": {
+          "name": "users_is_renter_idx",
+          "columns": [
+            {
+              "expression": "is_renter",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"users\".\"is_renter\"",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -583,7 +674,12 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "users_has_a_role": {
+          "name": "users_has_a_role",
+          "value": "\"users\".\"is_landlord\" or \"users\".\"is_renter\""
+        }
+      },
       "isRLSEnabled": false
     }
   },
@@ -595,14 +691,6 @@
         "landlord",
         "renter",
         "property"
-      ]
-    },
-    "public.user_role": {
-      "name": "user_role",
-      "schema": "public",
-      "values": [
-        "landlord",
-        "renter"
       ]
     }
   },

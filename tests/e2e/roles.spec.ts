@@ -790,7 +790,7 @@ test.describe("adding a property with both roles", () => {
     });
     const property = makeProperty();
     await fillPropertyForm(page, property);
-    await expect(page.getByText("Only landlords can list themselves as the landlord.")).toBeVisible();
+    await expect(page.getByText("Choose a landlord from the list.")).toBeVisible();
     await expect(page).toHaveURL(/\/properties\/new$/);
   });
 });

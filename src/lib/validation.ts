@@ -116,12 +116,11 @@ export const propertySchema = z.object({
   description: optionalText(300, "Description"),
   // People who are both a landlord and a renter say which applies here.
   relation: z.enum(["own", "rent"], { error: "Choose whether you own or rent this place." }).optional(),
-  // "" = not on GossipRent / not sure, "me" = the person adding it.
-  // Missing (undefined) means the form had no landlord field at all.
+  // A renter's landlord, if they're on GossipRent ("" = not on GossipRent / not sure).
   landlordId: z
-    .union([z.literal(""), z.literal("me"), z.uuid("Choose a landlord from the list.")])
+    .union([z.literal(""), z.uuid("Choose a landlord from the list.")])
     .optional()
-    .transform((value) => (value === undefined ? undefined : value || null)),
+    .transform((value) => value || null),
 });
 
 export type FieldErrors = Partial<Record<string, string[]>>;

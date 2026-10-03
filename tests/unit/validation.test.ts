@@ -323,10 +323,9 @@ describe("propertySchema", () => {
       region: "TX",
       postalCode: "78702",
       description: "Bakery below.",
+      landlordId: null,
     });
-    // No landlord field at all stays undefined (the form had no picker)...
-    expect(data.landlordId).toBeUndefined();
-    // ...while a blank picker means "not on GossipRent / not sure".
+    // A blank picker also means "not on GossipRent / not sure".
     expect(propertySchema.parse({ ...valid, landlordId: "" }).landlordId).toBeNull();
   });
 
@@ -378,8 +377,8 @@ describe("propertySchema", () => {
     ]);
   });
 
-  it('accepts "me" (the person adding it manages it) as the landlord', () => {
-    expect(propertySchema.parse({ ...valid, landlordId: "me" }).landlordId).toBe("me");
+  it('rejects "me" as a landlord (only "" or a landlord\'s id)', () => {
+    expect(propertySchema.safeParse({ ...valid, landlordId: "me" }).success).toBe(false);
   });
 
   it.each([["Me"], ["ME"], [" me"], ["myself"], ["self"]])("rejects landlord %j", (landlordId) => {

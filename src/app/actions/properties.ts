@@ -10,9 +10,9 @@ import { findPropertyByAddress, getProperty, isUuid } from "@/lib/data";
 import { formValues, parseForm, propertySchema, type FormState } from "@/lib/validation";
 
 /**
- * Add a property. A landlord can list it as their own ("me"); a renter can
- * link their landlord if they're on GossipRent. Someone who is only a
- * landlord always lists it as their own.
+ * Add a property. Someone who is only a landlord lists it as their own, and
+ * someone who is only a renter adds a place they rent (optionally linking its
+ * landlord). Someone with both roles says which ("own" or "rent").
  */
 export async function createProperty(_prev: FormState, formData: FormData): Promise<FormState> {
   const user = await getCurrentUser();
@@ -23,38 +23,23 @@ export async function createProperty(_prev: FormState, formData: FormData): Prom
   const data = parsed.data;
 
   const db = await getDb();
-  const fieldError = (message: string): FormState => ({
+  const fieldError = (field: "relation" | "landlordId", message: string): FormState => ({
     status: "error",
     message: "Please fix the highlighted fields.",
-    fieldErrors: { landlordId: [message] },
+    fieldErrors: { [field]: [message] },
     values: formValues(formData),
   });
-  // Someone with both roles must say whether they own or rent the place. A
-  // landlord of "me" (or their own id) means own, and picking another
-  // landlord means rent; an empty landlord field on its own decides nothing
-  // (the picker is always in their form, just hidden until they pick "Rent").
-  const relation =
-    data.relation ??
-    (data.landlordId === "me" || data.landlordId === user.id
-      ? "own"
-      : data.landlordId
-        ? "rent"
-        : undefined);
-  if (user.isLandlord && user.isRenter && !relation) {
-    return {
-      status: "error",
-      message: "Please fix the highlighted fields.",
-      fieldErrors: { relation: ["Choose whether you own or rent this place."] },
-      values: formValues(formData),
-    };
-  }
+
+  const relation = !user.isRenter ? "own" : !user.isLandlord ? "rent" : data.relation;
+  if (!relation) return fieldError("relation", "Choose whether you own or rent this place.");
+
   let landlordId: string | null = null;
-  if (relation === "own" || data.landlordId === "me" || data.landlordId === user.id || !user.isRenter) {
-    if (!user.isLandlord) {
-      return fieldError("Only landlords can list themselves as the landlord.");
-    }
+  if (relation === "own") {
     landlordId = user.id;
   } else if (data.landlordId) {
+    if (data.landlordId === user.id) {
+      return fieldError("landlordId", "You can't be the landlord of a place you rent.");
+    }
     const [landlord] = await db
       .select({ id: users.id })
       .from(users)
@@ -62,7 +47,7 @@ export async function createProperty(_prev: FormState, formData: FormData): Prom
         and(eq(users.id, data.landlordId), eq(users.isLandlord, true), isNull(users.deletedAt)),
       )
       .limit(1);
-    if (!landlord) return fieldError("That landlord isn't on GossipRent anymore.");
+    if (!landlord) return fieldError("landlordId", "That landlord isn't on GossipRent anymore.");
     landlordId = landlord.id;
   }
 
@@ -114,11 +99,13 @@ export async function createProperty(_prev: FormState, formData: FormData): Prom
       return row;
     });
     if (!created) {
-      return fieldError(
-        landlordId === user.id
-          ? "Only landlords can list themselves as the landlord."
-          : "That landlord isn't on GossipRent anymore.",
-      );
+      return landlordId === user.id
+        ? {
+            status: "error",
+            message: "Only landlords can list a property as their own.",
+            values: formValues(formData),
+          }
+        : fieldError("landlordId", "That landlord isn't on GossipRent anymore.");
     }
     propertyId = created.id;
   } catch (error) {
@@ -179,7 +166,9 @@ export async function claimProperty(_prev: FormState, formData: FormData): Promi
       .where(eq(properties.id, propertyId))
       .for("update");
     if (!property) return "missing" as const;
-    if (property.landlordId) return property.landlordId === user.id ? ("claimed" as const) : ("taken" as const);
+    if (property.landlordId) {
+      return property.landlordId === user.id ? ("claimed" as const) : ("taken" as const);
+    }
     const [reviewed] = await tx
       .select({ id: reviews.id })
       .from(reviews)
@@ -222,7 +211,10 @@ export async function unlinkProperty(_prev: FormState, formData: FormData): Prom
  * Server Action (not a client wrapper) to useActionState keeps the form
  * working before JavaScript loads.
  */
-export async function updatePropertyLandlord(prev: FormState, formData: FormData): Promise<FormState> {
+export async function updatePropertyLandlord(
+  prev: FormState,
+  formData: FormData,
+): Promise<FormState> {
   return formData.get("intent") === "claim"
     ? claimProperty(prev, formData)
     : unlinkProperty(prev, formData);

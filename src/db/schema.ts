@@ -15,13 +15,6 @@ import {
 export const USER_ROLES = ["landlord", "renter"] as const;
 
 /**
- * @deprecated Replaced by users.isLandlord / users.isRenter. Kept (nullable,
- * unused) for one release so a deployment still running the old code keeps
- * working while the new one builds. Drop it in a later migration.
- */
-export const legacyUserRole = pgEnum("user_role", USER_ROLES);
-
-/**
  * What a review is about:
  * - "landlord": a renter reviewing a landlord (subjectUserId is set)
  * - "renter":   a landlord reviewing a renter (subjectUserId is set)
@@ -43,8 +36,6 @@ export const users = pgTable(
     passwordHash: text("password_hash").notNull(),
     // Someone can rent a home and also rent one out, so a person can be a
     // landlord, a renter, or both. Reviews say which role they're about.
-    /** @deprecated See legacyUserRole. Not read or written by the app. */
-    legacyRole: legacyUserRole("role"),
     isLandlord: boolean("is_landlord").notNull().default(false),
     isRenter: boolean("is_renter").notNull().default(false),
     city: text("city"),

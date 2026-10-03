@@ -1,7 +1,7 @@
 /**
  * Accounts that are a renter, a landlord, or both: sign-up, adding and removing
  * a role, who may review whom, one review per author per person *per role*,
- * separate ratings for each role, and adding properties as "me".
+ * separate ratings for each role, and adding properties as owner or renter.
  *
  * Like server-actions.test.ts, the Server Actions run against a throwaway
  * embedded database with Next's request APIs replaced by small fakes.
@@ -264,7 +264,8 @@ const reviewedAs = (role: UserRole) => `People have reviewed you as a ${role}, s
 const CLAIMED = "Done. You're now listed as this property's landlord.";
 const CLAIM_AFTER_REVIEW =
   "You've reviewed this property as a renter, so you can't also be its landlord. Delete your review first.";
-const ONLY_LANDLORDS_ME = "Only landlords can list themselves as the landlord.";
+const ONLY_LANDLORDS_OWN = "Only landlords can list a property as their own.";
+const NOT_YOUR_OWN_LANDLORD = "You can't be the landlord of a place you rent.";
 const CHOOSE_RELATION = "Choose whether you own or rent this place.";
 
 type Request<T> = { cookies: Map<string, string>; run: () => Promise<T> };
@@ -610,7 +611,7 @@ describe("changeRole", () => {
       expect(removed.status, detail).toBe("success");
       expect(await propertiesOfNonLandlord(user.id), detail).toEqual([]);
       if (!("redirect" in added)) {
-        expect(added, detail).toMatchObject({ status: "error", fieldErrors: { landlordId: [ONLY_LANDLORDS_ME] } });
+        expect(added, detail).toMatchObject({ status: "error", message: ONLY_LANDLORDS_OWN });
       }
     }
   }, 60_000);
@@ -1123,7 +1124,7 @@ describe("per-role ratings", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Adding a property: "me" and linking a landlord
+// Adding a property: who the landlord is, by role
 // ---------------------------------------------------------------------------
 
 describe("createProperty and roles", () => {
@@ -1162,11 +1163,11 @@ describe("createProperty and roles", () => {
     both = await createUser("both");
   });
 
-  it('someone with both roles lists it as their own with "me" (or their own id)', async () => {
+  it('someone with both roles lists it as their own with "own" (a picked landlord is ignored)', async () => {
     const user = await createUser("both");
     await logInAs(user);
-    expect(await add("me")).toEqual({ landlordId: user.id });
-    expect(await add(user.id)).toEqual({ landlordId: user.id });
+    expect(await add("", { relation: "own" })).toEqual({ landlordId: user.id });
+    expect(await add(landlord.id, { relation: "own" })).toEqual({ landlordId: user.id });
     expect(revalidatePath).toHaveBeenCalledWith(`/landlords/${user.id}`);
   });
 
@@ -1174,21 +1175,29 @@ describe("createProperty and roles", () => {
     const user = await createUser("both");
     await logInAs(user);
     expect(await add("", { relation: "rent" })).toEqual({ landlordId: null });
-    expect(await add(landlord.id)).toEqual({ landlordId: landlord.id });
+    expect(await add(landlord.id, { relation: "rent" })).toEqual({ landlordId: landlord.id });
     // Another person with both roles is a landlord too.
-    expect(await add(both.id)).toEqual({ landlordId: both.id });
+    expect(await add(both.id, { relation: "rent" })).toEqual({ landlordId: both.id });
+    // But not themselves.
+    expect(await add(user.id, { relation: "rent" })).toMatchObject({
+      status: "error",
+      fieldErrors: { landlordId: [NOT_YOUR_OWN_LANDLORD] },
+    });
   });
 
-  it('a renter can\'t use "me" or their own id to become a property\'s landlord', async () => {
+  it("a renter can't make themselves a property's landlord", async () => {
     const user = await createUser("renter");
     await logInAs(user);
-    for (const value of ["me", user.id]) {
-      expect(await add(value)).toMatchObject({
-        status: "error",
-        fieldErrors: { landlordId: [ONLY_LANDLORDS_ME] },
-        values: { landlordId: value },
-      });
-    }
+    expect(await add(user.id)).toMatchObject({
+      status: "error",
+      fieldErrors: { landlordId: [NOT_YOUR_OWN_LANDLORD] },
+      values: { landlordId: user.id },
+    });
+    // "own" isn't a choice for them; it's treated as renting.
+    expect(await add(user.id, { relation: "own" })).toMatchObject({
+      status: "error",
+      fieldErrors: { landlordId: [NOT_YOUR_OWN_LANDLORD] },
+    });
     const db = await getDb();
     expect(await db.select().from(properties).where(eq(properties.createdById, user.id))).toEqual([]);
   });
@@ -1206,7 +1215,6 @@ describe("createProperty and roles", () => {
     const user = await createUser("landlord");
     await logInAs(user);
     expect(await add("")).toEqual({ landlordId: user.id });
-    expect(await add("me")).toEqual({ landlordId: user.id });
     expect(await add(landlord.id)).toEqual({ landlordId: user.id });
   });
 
@@ -1418,32 +1426,23 @@ describe("createProperty: own or rent", () => {
     expect(await review("property", owned.propertyId)).toEqual({ status: "error", message: NOT_YOUR_PROPERTY });
   });
 
-  it('older forms that send landlordId "me" (and no relation) still list it as their own', async () => {
+  it("someone with both roles must choose, even if they picked a landlord", async () => {
     const user = await createUser("both");
     await logInAs(user);
-    expect(await addWith({ landlordId: "me" })).toMatchObject({ landlordId: user.id });
+    const attempts: Record<string, string>[] = [{}, { landlordId: "" }, { landlordId: landlord.id }];
+    for (const fields of attempts) {
+      expect(await addWith(fields)).toMatchObject({
+        status: "error",
+        fieldErrors: { relation: ["Choose whether you own or rent this place."] },
+      });
+    }
+    expect(await createdBy(user.id)).toBe(0);
   });
 
-  it("picking another landlord counts as renting, but an empty landlord field isn't a choice", async () => {
-    const user = await createUser("both");
-    await logInAs(user);
-    expect(await addWith({ landlordId: landlord.id })).toMatchObject({ landlordId: landlord.id });
-    // Their form always contains the (hidden) landlord picker, so "" alone is ambiguous.
-    expect(await addWith({ landlordId: "" })).toMatchObject({
-      status: "error",
-      fieldErrors: { relation: ["Choose whether you own or rent this place."] },
-    });
-  });
-
-  it('a renter-only user can\'t use "own" to become the landlord', async () => {
+  it("a renter-only user isn't asked to choose; \"own\" can't make them the landlord", async () => {
     const user = await createUser("renter");
     await logInAs(user);
-    expect(await addWith({ relation: "own" })).toMatchObject({
-      status: "error",
-      fieldErrors: { landlordId: [ONLY_LANDLORDS_ME] },
-    });
-    expect(await createdBy(user.id)).toBe(0);
-    // They aren't asked to choose, and can link a landlord as before.
+    expect(await addWith({ relation: "own" })).toMatchObject({ landlordId: null });
     expect(await addWith({ landlordId: landlord.id })).toMatchObject({ landlordId: landlord.id });
     expect(await addWith({})).toMatchObject({ landlordId: null });
   });
