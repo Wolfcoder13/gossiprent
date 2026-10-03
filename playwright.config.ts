@@ -32,6 +32,8 @@ process.env.E2E_PGLITE_DATA_DIR ??= path.join(
 
 export default defineConfig({
   testDir: "./tests/e2e",
+  // Per port, so runs on different E2E_PORTs don't wipe each other's traces.
+  outputDir: `test-results/${port}`,
   // All tests share one server and one embedded database (a single connection),
   // and a few assertions compare site-wide counts, so use a single worker.
   workers: 1,
@@ -43,6 +45,24 @@ export default defineConfig({
   globalTeardown: "./tests/e2e/global-teardown.ts",
   use: {
     baseURL,
+    // The site is Icelandic unless the visitor picks English (a `lang` cookie).
+    // Tests run in English; Icelandic tests clear this cookie (see setLanguage
+    // in tests/e2e/helpers.ts, or test.use({ storageState: { cookies: [], origins: [] } })).
+    storageState: {
+      cookies: [
+        {
+          name: "lang",
+          value: "en",
+          domain: "localhost",
+          path: "/",
+          httpOnly: true,
+          secure: false,
+          sameSite: "Lax",
+          expires: -1,
+        },
+      ],
+      origins: [],
+    },
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
     launchOptions: {
@@ -63,6 +83,9 @@ export default defineConfig({
       // itself is covered by tests/unit/rate-limit.test.ts and
       // tests/unit/server-actions.test.ts.
       AUTH_RATE_LIMIT: "off",
+      // `next start` runs in production mode, where the demo data's "Gervimaður"
+      // test kennitalas (010130-xxx9, 450535-2068) are refused unless allowed.
+      ALLOW_TEST_KENNITALA: "true",
       // Never point the tests at the shell's DATABASE_URL; only an explicit
       // E2E_DATABASE_URL switches from the embedded database to Postgres.
       DATABASE_URL: process.env.E2E_DATABASE_URL ?? "",

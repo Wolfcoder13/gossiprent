@@ -38,8 +38,9 @@ export default {
       renter: "Reviews as a renter",
     },
     intro: {
-      landlord: "What renters say about {name}.",
-      renter: "What landlords say about {name}.",
+      // The name isn't sentence-final: company names end in a period ("ehf.").
+      landlord: "{name}, as rated by their renters.",
+      renter: "{name}, as rated by their landlords.",
     },
     empty: {
       landlord: "No reviews for {name} yet",

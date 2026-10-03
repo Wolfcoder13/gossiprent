@@ -189,6 +189,17 @@ export function searchTerms(query: string | undefined): string[] {
   return [...words].slice(0, 8);
 }
 
+// Words the site adds in front of an apartment number ("Njálsgata 23, íbúð 0201",
+// "apt. 0201") but that aren't stored (normalizeUnit strips them), folded.
+const UNIT_WORDS = new Set(["ibud", "ib", "ib.", "apt", "apt.", "unit", "#"]);
+
+/** Property search words: an address copied from the site still matches. */
+function propertySearchTerms(query: string | undefined): string[] {
+  return searchTerms(query)
+    .filter((term) => !UNIT_WORDS.has(term))
+    .map((term) => term.replace(/^#(?=\d)/, ""));
+}
+
 // A person's city has no stored search column, so fold it in SQL like foldForSearch
 // does (lower() alone only folds ASCII under the C collation).
 const SINGLE_FOLDS = Object.entries(SEARCH_FOLDS).filter(([, plain]) => plain.length === 1);
@@ -368,7 +379,7 @@ export async function listProperties(options: {
       ? or(isNull(properties.landlordId), ne(properties.landlordId, notLandlordId))
       : undefined,
     // Every word must match the address and apartment, or name the postcode or place.
-    ...searchTerms(query).map((term) => {
+    ...propertySearchTerms(query).map((term) => {
       const postcodes = postcodesMatching(term);
       return or(
         like(properties.addressSearch, likePattern(term)),
