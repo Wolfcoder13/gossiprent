@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 // "@/db" imports "server-only" (stubbed in vitest.config.mts); nothing here opens a connection.
-import { getDatabaseMode, pgErrorCode } from "@/db";
+import { getDatabaseMode, pgConstraint, pgErrorCode, sanitizeDbError } from "@/db";
 import { connect, DatabaseNotConfiguredError, getDatabaseUrl } from "@/db/connect";
 
 describe("pgErrorCode", () => {
@@ -32,6 +32,51 @@ describe("pgErrorCode", () => {
     const cyclic: { cause?: unknown } = {};
     cyclic.cause = cyclic;
     expect(pgErrorCode(cyclic)).toBeUndefined();
+  });
+});
+
+describe("pgConstraint", () => {
+  it("reads the constraint name from the error or a wrapped driver error", () => {
+    const driverError = Object.assign(new Error("duplicate key"), { code: "23505", constraint: "users_email_unique" });
+    expect(pgConstraint(driverError)).toBe("users_email_unique");
+    expect(pgConstraint(new Error("Failed query", { cause: driverError }))).toBe("users_email_unique");
+  });
+
+  it("returns undefined when there is none", () => {
+    expect(pgConstraint(new Error("plain"))).toBeUndefined();
+    expect(pgConstraint(Object.assign(new Error("x"), { code: "25P02" }))).toBeUndefined();
+    expect(pgConstraint(undefined)).toBeUndefined();
+  });
+});
+
+describe("sanitizeDbError", () => {
+  // What drizzle throws: the query and its parameters in the message, Postgres's
+  // error (with the row values in its detail) as the cause.
+  const kennitala = "1503853579";
+  const driverError = Object.assign(new Error("duplicate key value violates unique constraint"), {
+    code: "23505",
+    constraint: "users_kennitala_unique",
+    detail: `Key (kennitala)=(${kennitala}) already exists.`,
+  });
+  const drizzleError = new Error(
+    `Failed query: insert into "users" ("kennitala", "email") values ($1, $2)\nparams: ${kennitala},jon@example.com`,
+    { cause: driverError },
+  );
+
+  it("keeps only the Postgres code and constraint name", () => {
+    const sanitized = sanitizeDbError(drizzleError);
+    expect(sanitized.message).toBe("Database error 23505 (users_kennitala_unique)");
+    expect(sanitized.cause).toBeUndefined();
+    expect(`${sanitized.message}\n${sanitized.stack}`).not.toContain(kennitala);
+    expect(`${sanitized.message}\n${sanitized.stack}`).not.toContain("jon@example.com");
+  });
+
+  it("copes with errors that have no code or constraint", () => {
+    expect(sanitizeDbError(Object.assign(new Error("x"), { code: "25P02" })).message).toBe("Database error 25P02");
+    expect(sanitizeDbError(new Error(`connection lost while sending ${kennitala}`)).message).toBe(
+      "Database error unknown",
+    );
+    expect(sanitizeDbError("not an error").message).toBe("Database error unknown");
   });
 });
 

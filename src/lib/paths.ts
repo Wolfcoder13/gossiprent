@@ -1,4 +1,4 @@
-import type { ReviewKind, UserRole } from "@/db/schema";
+import type { ReportTarget, ReviewKind, UserRole } from "@/db/schema";
 import { hasRole, primaryRole, type HasRoles } from "./roles";
 
 /** URL of a landlord, renter, or property page. */
@@ -30,4 +30,10 @@ export function pageHref(
   if (page > 1) search.set("page", String(page));
   const qs = search.toString();
   return `${basePath}${qs ? `?${qs}` : ""}${hash ? `#${hash}` : ""}`;
+}
+
+/** The report form for a review, profile or property, or (without an id) "someone has my account". */
+export function reportPath(target: ReportTarget, id?: string): string {
+  const search = new URLSearchParams({ target, ...(id ? { id } : {}) });
+  return `/report?${search}`;
 }

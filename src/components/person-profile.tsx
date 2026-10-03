@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import type { UserRole } from "@/db/schema";
+import { getFormat, getT } from "@/i18n/server";
 import { getCurrentUser } from "@/lib/auth/current-user";
 import {
   getPublicUser,
@@ -8,38 +9,91 @@ import {
   getReviewByAuthor,
   listProperties,
   listReviewsAbout,
+  type PublicUser,
 } from "@/lib/data";
-import { formatMonthYear, plural } from "@/lib/format";
-import { profilePath } from "@/lib/paths";
+import { profilePath, reportPath } from "@/lib/paths";
 import { hasRole, reviewerRole, rolesOf } from "@/lib/roles";
 import { CardGrid, PropertyCard } from "./cards";
 import { Pagination, redirectIfPastLastPage } from "./pagination";
 import { RatingSummary } from "./rating-summary";
 import { ReviewList } from "./review-card";
 import { ReviewPanel, ReviewsHeading } from "./review-panel";
-import { formatRating } from "./stars";
-import { Avatar, buttonStyles, Card, cx, EmptyState, RoleBadge } from "./ui";
+import { Avatar, buttonStyles, Card, cx, EmptyState, NoAccountBadge, RoleBadge } from "./ui";
 
 const PROPERTIES_SHOWN = 60;
 
-const ROLE_TAB_LABEL: Record<UserRole, string> = {
-  landlord: "As a landlord",
-  renter: "As a renter",
-};
+// Message keys, per role (translated inside the request).
+const TAB = { landlord: "profile.tabs.landlord", renter: "profile.tabs.renter" } as const;
+const RATING_HEADING = { landlord: "profile.ratingHeading.landlord", renter: "profile.ratingHeading.renter" } as const;
+const REVIEWS_HEADING = { landlord: "profile.reviews.heading.landlord", renter: "profile.reviews.heading.renter" } as const;
+const REVIEWS_INTRO = { landlord: "profile.reviews.intro.landlord", renter: "profile.reviews.intro.renter" } as const;
+const REVIEWS_EMPTY = { landlord: "profile.reviews.empty.landlord", renter: "profile.reviews.empty.renter" } as const;
+const REVIEWS_EMPTY_SELF = {
+  landlord: "profile.reviews.emptySelf.landlord",
+  renter: "profile.reviews.emptySelf.renter",
+} as const;
+const OWNER_NOTE = { landlord: "profile.ownerNote.landlord", renter: "profile.ownerNote.renter" } as const;
+
+/** "Reykjavík · Member since October 2026" or "First reviewed October 2026", and the fine print. */
+async function ProfileFacts({ person }: { person: PublicUser }) {
+  const [t, format] = await Promise.all([getT(), getFormat()]);
+  if (person.hasAccount) {
+    const since = person.joinedAt ? format.monthYear(person.joinedAt) : null;
+    return (
+      <>
+        {since && (
+          <p className="mt-1 text-sm wrap-anywhere text-muted">
+            {person.city
+              ? t("profile.cityMemberSince", { city: person.city, date: since })
+              : t("profile.memberSince", { date: since })}
+          </p>
+        )}
+        <p className="mt-0.5 text-xs text-muted">{t("profile.identityNotVerified")}</p>
+      </>
+    );
+  }
+  return person.firstReviewedAt ? (
+    <p className="mt-1 text-sm text-muted">
+      {t("profile.firstReviewed", { date: format.monthYear(person.firstReviewedAt) })}
+    </p>
+  ) : null;
+}
+
+/** On a profile without an account: where the page and its name came from, and how to take it over. */
+async function NoAccountNote({ person }: { person: PublicUser }) {
+  const t = await getT();
+  return (
+    <p className="mt-4 rounded-xl border border-line bg-surface-muted px-4 py-3 text-sm text-muted">
+      {person.isCompany
+        ? t("profile.noAccountNote.company")
+        : t.rich("profile.noAccountNote.person", {
+            signUp: (
+              <Link href="/signup" className="font-semibold text-brand hover:underline">
+                {t("profile.signUp")}
+              </Link>
+            ),
+          })}
+    </p>
+  );
+}
 
 /**
- * Public profile page for a person in one role. Someone who is both a
- * landlord and a renter has two pages (/landlords/:id and /renters/:id), each
- * with its own rating, linked by tabs.
+ * Public profile page for a person (or company) in one role, with or without
+ * an account. Someone who is both a landlord and a renter has two pages
+ * (/landlords/:id and /renters/:id), each with its own rating, linked by tabs.
+ * Never shows the kennitala.
  */
 export async function PersonProfile({
   id,
   role,
   page,
+  saved = false,
 }: {
   id: string;
   role: UserRole;
   page: number;
+  /** ?saved=1: the viewer just posted a review here from /reviews/new. */
+  saved?: boolean;
 }) {
   const person = await getPublicUser(id);
   if (!person) notFound();
@@ -48,7 +102,7 @@ export async function PersonProfile({
 
   const roles = rolesOf(person);
   const otherRole = roles.find((r) => r !== role);
-  const viewer = await getCurrentUser();
+  const [viewer, t, format] = await Promise.all([getCurrentUser(), getT(), getFormat()]);
   const [summary, otherSummary, reviewPage, myReview, managed] = await Promise.all([
     getRatingSummary({ userId: id, as: role }),
     otherRole ? getRatingSummary({ userId: id, as: otherRole }) : null,
@@ -68,7 +122,6 @@ export async function PersonProfile({
     hash: "reviews",
   });
   const isSelf = viewer?.id === id;
-  const reviewerNoun = `${reviewerRole(role)}s`;
   // Renters review landlords and landlords review renters.
   const mayReview = !isSelf && (!viewer || hasRole(viewer, reviewerRole(role)));
 
@@ -87,28 +140,17 @@ export async function PersonProfile({
                   {roles.map((r) => (
                     <RoleBadge key={r} role={r} />
                   ))}
-                  {person.deletedAt && (
-                    <span className="rounded-full bg-surface-muted px-2.5 py-0.5 text-xs font-semibold text-muted">
-                      Account closed
-                    </span>
-                  )}
+                  {!person.hasAccount && <NoAccountBadge />}
                 </div>
-                <p className="mt-1 text-sm wrap-anywhere text-muted">
-                  {person.city ? `${person.city} · ` : ""}Member since {formatMonthYear(person.createdAt)}
-                </p>
+                <ProfileFacts person={person} />
                 {person.bio && (
                   <p className="mt-3 whitespace-pre-line break-words text-ink/85">{person.bio}</p>
                 )}
-                {person.deletedAt && (
-                  <p className="mt-3 text-sm text-muted">
-                    {person.name} closed their account
-                    {summary.count > 0 ? ". Reviews written about them are still shown." : "."}
-                  </p>
-                )}
               </div>
             </div>
+            {!person.hasAccount && <NoAccountNote person={person} />}
             {otherRole && (
-              <nav aria-label="Ratings by role" className="mt-6 flex flex-wrap gap-2">
+              <nav aria-label={t("profile.tabs.label")} className="mt-6 flex flex-wrap gap-2">
                 {roles.map((r) => {
                   const s = summaries[r]!;
                   return (
@@ -123,16 +165,17 @@ export async function PersonProfile({
                           : "border-line-strong text-muted hover:bg-surface-muted hover:text-ink",
                       )}
                     >
-                      {ROLE_TAB_LABEL[r]}{" "}
+                      {t(TAB[r])}{" "}
                       <span className="text-xs">
                         {s.count > 0 ? (
                           <>
-                            ({formatRating(s.average)}
+                            ({format.rating(s.average)}
                             <span aria-hidden>★</span>
-                            <span className="sr-only"> stars</span>, {plural(s.count, "review")})
+                            <span className="sr-only">{t("profile.tabs.outOf")}</span>,{" "}
+                            {t("common.rating.reviewCount", { count: s.count })})
                           </>
                         ) : (
-                          "(no reviews)"
+                          t("profile.tabs.noReviews")
                         )}
                       </span>
                     </Link>
@@ -143,7 +186,7 @@ export async function PersonProfile({
             <div className={cx("border-t border-line pt-6", otherRole ? "mt-4" : "mt-6")}>
               {otherRole && (
                 <h2 className="mb-4 text-sm font-semibold text-muted">
-                  {person.name}&apos;s rating {ROLE_TAB_LABEL[role].toLowerCase()}
+                  {t(RATING_HEADING[role], { name: person.name })}
                 </h2>
               )}
               <RatingSummary summary={summary} />
@@ -158,15 +201,25 @@ export async function PersonProfile({
                   "mt-6 w-full rounded-2xl text-center wrap-anywhere lg:hidden",
                 )}
               >
-                {myReview ? "Edit your review" : `Review ${person.name}`}
+                {myReview ? t("profile.editButton") : t("profile.reviewButton", { name: person.name })}
               </a>
             )}
+            <p className="mt-4 text-right">
+              <Link
+                href={reportPath("profile", person.id)}
+                rel="nofollow"
+                className="text-xs text-muted hover:text-ink hover:underline"
+              >
+                {t("profile.report")}
+              </Link>
+            </p>
           </Card>
 
           {managed && (
             <section aria-labelledby="properties-heading">
               <h2 id="properties-heading" className="mb-4 text-xl font-bold tracking-tight text-ink">
-                Properties <span className="font-normal text-muted">({managed.total})</span>
+                {t("profile.properties.heading")}{" "}
+                <span className="font-normal text-muted">({format.number(managed.total)})</span>
               </h2>
               {managed.items.length > 0 ? (
                 <>
@@ -179,12 +232,12 @@ export async function PersonProfile({
                   </CardGrid>
                   {managed.total > managed.items.length && (
                     <p className="mt-3 text-sm text-muted">
-                      Showing {managed.items.length} of {managed.total} properties.
+                      {t("profile.properties.showing", { count: managed.total, shown: managed.items.length })}
                     </p>
                   )}
                 </>
               ) : (
-                <EmptyState title="No properties listed yet" />
+                <EmptyState title={t("profile.properties.empty")} />
               )}
             </section>
           )}
@@ -194,9 +247,9 @@ export async function PersonProfile({
               <ReviewsHeading
                 id="reviews-heading"
                 count={reviewPage.total}
-                label={otherRole ? `Reviews as a ${role}` : undefined}
+                label={otherRole ? t(REVIEWS_HEADING[role]) : undefined}
               />
-              <p className="text-sm text-muted">What {reviewerNoun} say about {person.name}.</p>
+              <p className="text-sm text-muted">{t(REVIEWS_INTRO[role], { name: person.name })}</p>
             </div>
             {reviewPage.items.length > 0 ? (
               <div className="space-y-4">
@@ -204,10 +257,8 @@ export async function PersonProfile({
                 <Pagination page={page} pageCount={reviewPage.pageCount} basePath={path} hash="reviews" />
               </div>
             ) : (
-              <EmptyState title={`No reviews for ${person.name} yet`}>
-                {isSelf
-                  ? `When ${reviewerNoun} review you, their reviews will show up here.`
-                  : `Be the first to share your experience.`}
+              <EmptyState title={t(REVIEWS_EMPTY[role], { name: person.name })}>
+                {isSelf ? t(REVIEWS_EMPTY_SELF[role]) : t("profile.reviews.emptyOther")}
               </EmptyState>
             )}
           </section>
@@ -221,11 +272,8 @@ export async function PersonProfile({
             viewer={viewer}
             existing={myReview}
             returnTo={path}
-            ownerNote={
-              isSelf
-                ? `This is your public profile. Reviews from ${reviewerNoun} appear here — you can't review yourself.`
-                : undefined
-            }
+            ownerNote={isSelf ? t(OWNER_NOTE[role]) : undefined}
+            saved={saved}
           />
         </aside>
       </div>

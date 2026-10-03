@@ -1,39 +1,61 @@
+import type { Metadata } from "next";
 import Link from "next/link";
+import { KennitalaLookup } from "@/components/kennitala-lookup";
+import { redirectKennitalaQuery } from "@/components/kennitala-query";
 import { ReviewList } from "@/components/review-card";
+import { SearchBox } from "@/components/search-box";
 import { ButtonLink, EmptyState, Notice } from "@/components/ui";
+import { getFormat, getT } from "@/i18n/server";
 import { getCurrentUser } from "@/lib/auth/current-user";
 import { getSiteStats, listRecentReviews } from "@/lib/data";
 
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getT();
+  return { title: { absolute: t("meta.title") }, description: t("meta.description") };
+}
+
+// Message keys for the three "what you can review" cards.
 const PATHS = [
   {
-    eyebrow: "For renters",
-    title: "Review your landlord",
-    body: "Were repairs quick? Was the deposit returned? Help the next tenant know what they're signing up for.",
+    eyebrow: "home.paths.forRenters",
+    title: "home.paths.landlord.title",
+    body: "home.paths.landlord.body",
+    cta: "home.paths.landlord.cta",
     href: "/landlords",
-    cta: "Find a landlord",
     accent: "bg-amber-100 text-amber-900 dark:bg-amber-400/15 dark:text-amber-200",
   },
   {
-    eyebrow: "For renters",
-    title: "Review the place you rent",
-    body: "Noise, light, heating, pests, neighbors — share what living there is really like.",
+    eyebrow: "home.paths.forRenters",
+    title: "home.paths.property.title",
+    body: "home.paths.property.body",
+    cta: "home.paths.property.cta",
     href: "/properties",
-    cta: "Find a property",
     accent: "bg-sky-100 text-sky-900 dark:bg-sky-400/15 dark:text-sky-200",
   },
   {
-    eyebrow: "For landlords",
-    title: "Review your renters",
-    body: "On-time rent, respectful neighbors, a well-kept home — recognize great tenants and flag problems.",
+    eyebrow: "home.paths.forLandlords",
+    title: "home.paths.renter.title",
+    body: "home.paths.renter.body",
+    cta: "home.paths.renter.cta",
     href: "/renters",
-    cta: "Find a renter",
     accent: "bg-emerald-100 text-emerald-900 dark:bg-emerald-400/15 dark:text-emerald-200",
   },
-];
+] as const;
+
+const STATS = [
+  { key: "reviews", label: "home.stats.reviews" },
+  { key: "landlords", label: "home.stats.landlords" },
+  { key: "renters", label: "home.stats.renters" },
+  { key: "properties", label: "home.stats.properties" },
+] as const;
 
 export default async function HomePage({ searchParams }: PageProps<"/">) {
-  const [{ account }, stats, recent, user] = await Promise.all([
-    searchParams,
+  const search = await searchParams;
+  // The search box goes to /search, but a hand-made /?q=<kennitala> is never echoed either.
+  redirectKennitalaQuery(search.q);
+  const [t, format, stats, recent, user] = await Promise.all([
+    getT(),
+    getFormat(),
     getSiteStats(),
     listRecentReviews(6),
     getCurrentUser(),
@@ -41,54 +63,36 @@ export default async function HomePage({ searchParams }: PageProps<"/">) {
 
   return (
     <div className="mx-auto max-w-6xl px-4 sm:px-6">
-      {account === "deleted" && !user && (
+      {search.account === "deleted" && !user && (
         <div className="pt-6">
-          <Notice tone="success">Your account is closed and the reviews you wrote have been deleted.</Notice>
+          <Notice tone="success">{t("home.accountClosed")}</Notice>
         </div>
       )}
 
       <section className="py-14 sm:py-20">
-        <p className="text-sm font-semibold uppercase tracking-wide text-brand">
-          Landlord &amp; renter reviews
-        </p>
+        <p className="text-sm font-semibold uppercase tracking-wide text-brand">{t("home.hero.eyebrow")}</p>
         <h1 className="mt-3 max-w-3xl text-4xl font-bold tracking-tight text-ink sm:text-6xl">
-          Rent with your eyes open.
+          {t("home.hero.title")}
         </h1>
-        <p className="mt-5 max-w-2xl text-lg text-muted">
-          Renters review their landlords and the places they live. Landlords review their
-          renters. Star ratings plus honest, written reviews — so everyone knows who
-          they&apos;re dealing with.
-        </p>
+        <p className="mt-5 max-w-2xl text-lg text-muted">{t("home.hero.intro")}</p>
 
-        <form action="/search" role="search" className="mt-8 flex max-w-xl flex-col gap-2 sm:flex-row">
-          <label htmlFor="home-search" className="sr-only">
-            Search landlords, renters, and properties
-          </label>
-          <input
-            id="home-search"
-            name="q"
-            type="search"
-            placeholder="Search a name, city, or address"
-            className="flex-1 rounded-full border border-line-input bg-surface px-5 py-3 text-ink shadow-sm placeholder:text-muted focus:border-brand focus:outline-none focus:ring-2 focus:ring-focus/40"
-          />
-          <button
-            type="submit"
-            className="rounded-full bg-brand px-6 py-3 font-semibold text-brand-ink hover:bg-brand-hover"
-          >
-            Search
-          </button>
-        </form>
+        <SearchBox
+          action="/search"
+          inputId="home-search"
+          label={t("home.search.label")}
+          placeholder={t("home.search.placeholder")}
+          buttonLabel={t("home.search.button")}
+          variant="hero"
+        />
+        <div className="mt-6 max-w-xl">
+          <KennitalaLookup loggedIn={user !== null} />
+        </div>
 
         <dl className="mt-10 grid max-w-2xl grid-cols-2 gap-4 sm:grid-cols-4">
-          {[
-            { label: "Reviews", value: stats.reviews },
-            { label: "Landlords", value: stats.landlords },
-            { label: "Renters", value: stats.renters },
-            { label: "Properties", value: stats.properties },
-          ].map((stat) => (
-            <div key={stat.label} className="rounded-2xl border border-line bg-surface px-4 py-3">
-              <dt className="text-xs font-medium uppercase tracking-wide text-muted">{stat.label}</dt>
-              <dd className="text-2xl font-bold tabular-nums text-ink">{stat.value.toLocaleString("en-US")}</dd>
+          {STATS.map((stat) => (
+            <div key={stat.key} className="rounded-2xl border border-line bg-surface px-4 py-3">
+              <dt className="text-xs font-medium uppercase tracking-wide text-muted">{t(stat.label)}</dt>
+              <dd className="text-2xl font-bold tabular-nums text-ink">{format.number(stats[stat.key])}</dd>
             </div>
           ))}
         </dl>
@@ -96,18 +100,18 @@ export default async function HomePage({ searchParams }: PageProps<"/">) {
 
       <section aria-labelledby="paths-heading">
         <h2 id="paths-heading" className="sr-only">
-          What you can review
+          {t("home.paths.heading")}
         </h2>
         <ul className="grid gap-4 md:grid-cols-3">
           {PATHS.map((path) => (
             <li key={path.title} className="flex flex-col rounded-2xl border border-line bg-surface p-6 shadow-sm">
               <span className={`self-start rounded-full px-2.5 py-0.5 text-xs font-semibold ${path.accent}`}>
-                {path.eyebrow}
+                {t(path.eyebrow)}
               </span>
-              <h3 className="mt-3 text-xl font-semibold text-ink">{path.title}</h3>
-              <p className="mt-2 flex-1 text-muted">{path.body}</p>
+              <h3 className="mt-3 text-xl font-semibold text-ink">{t(path.title)}</h3>
+              <p className="mt-2 flex-1 text-muted">{t(path.body)}</p>
               <Link href={path.href} className="mt-5 font-semibold text-brand hover:underline">
-                {path.cta} →
+                {t(path.cta)} →
               </Link>
             </li>
           ))}
@@ -116,18 +120,17 @@ export default async function HomePage({ searchParams }: PageProps<"/">) {
 
       <section aria-labelledby="recent-heading" className="mt-16">
         <h2 id="recent-heading" className="text-2xl font-bold tracking-tight text-ink">
-          Latest reviews
+          {t("home.latest.heading")}
         </h2>
         <div className="mt-6">
           {recent.length > 0 ? (
             <ReviewList reviews={recent} viewerId={user?.id} showSubject />
           ) : (
             <EmptyState
-              title="No reviews yet"
-              action={!user && <ButtonLink href="/signup">Be the first — sign up</ButtonLink>}
+              title={t("home.latest.emptyTitle")}
+              action={!user && <ButtonLink href="/signup">{t("home.latest.emptyAction")}</ButtonLink>}
             >
-              Once people start reviewing landlords, renters, and properties, the newest reviews
-              will show up here.
+              {t("home.latest.emptyBody")}
             </EmptyState>
           )}
         </div>
@@ -135,22 +138,20 @@ export default async function HomePage({ searchParams }: PageProps<"/">) {
 
       {!user && (
         <section className="mt-16 rounded-3xl bg-brand px-6 py-10 text-brand-ink sm:px-10">
-          <h2 className="text-2xl font-bold tracking-tight sm:text-3xl">Had a landlord or tenant worth talking about?</h2>
-          <p className="mt-2 max-w-2xl opacity-90">
-            Create a free account as a renter or a landlord and leave your first review in a couple of minutes.
-          </p>
+          <h2 className="text-2xl font-bold tracking-tight sm:text-3xl">{t("home.cta.title")}</h2>
+          <p className="mt-2 max-w-2xl opacity-90">{t("home.cta.body")}</p>
           <div className="mt-6 flex flex-wrap gap-3">
             <Link
               href="/signup?role=renter"
               className="rounded-full bg-surface px-5 py-2.5 font-semibold text-ink hover:bg-surface-muted"
             >
-              I&apos;m a renter
+              {t("home.cta.renter")}
             </Link>
             <Link
               href="/signup?role=landlord"
               className="rounded-full border border-current px-5 py-2.5 font-semibold hover:bg-white/10"
             >
-              I&apos;m a landlord
+              {t("home.cta.landlord")}
             </Link>
           </div>
         </section>

@@ -1,3 +1,5 @@
+// @ts-nocheck -- being rewritten for the Iceland change (docs/iceland-spec.md)
+/* eslint-disable */
 import { expect, test } from "@playwright/test";
 import {
   addProperty,

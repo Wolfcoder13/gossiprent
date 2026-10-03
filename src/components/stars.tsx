@@ -1,4 +1,10 @@
+"use client";
+
+import { useFormat, useT } from "@/i18n/client";
 import { cx } from "./ui";
+
+// Client components (translated with useT/useFormat), so they work in server
+// and client trees alike.
 
 export const STAR_PATH =
   "M12 2.5l2.94 6.11 6.56.84-4.82 4.6 1.2 6.55L12 17.4l-5.88 3.2 1.2-6.55-4.82-4.6 6.56-.84L12 2.5z";
@@ -30,9 +36,11 @@ export function Stars({
   size?: keyof typeof SIZES;
   className?: string;
 }) {
+  const t = useT();
+  const format = useFormat();
   const value = rating === null ? 0 : Math.max(0, Math.min(5, rating));
   const label =
-    rating === null ? "No ratings yet" : `Rated ${formatRating(rating)} out of 5 stars`;
+    rating === null ? t("common.rating.none") : t("common.rating.stars", { rating: format.rating(rating) });
   return (
     <span role="img" aria-label={label} className={cx("relative inline-flex", className)}>
       <StarRow className="text-star-empty" size={size} />
@@ -43,24 +51,20 @@ export function Stars({
   );
 }
 
-/** "4.3", "5", or "—" */
-export function formatRating(rating: number | null): string {
-  if (rating === null) return "—";
-  return Number.isInteger(rating) ? String(rating) : rating.toFixed(1);
-}
-
-/** Stars plus "4.3 · 12 reviews". */
+/** Stars plus "4.3 · 12 reviews" ("4,3 · 12 umsagnir"). */
 export function RatingInline({ average, count }: { average: number | null; count: number }) {
+  const t = useT();
+  const format = useFormat();
   return (
     <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
       <Stars rating={average} size="sm" />
       {count > 0 ? (
         <span className="text-muted">
-          <span className="font-semibold text-ink">{formatRating(average)}</span> ·{" "}
-          {count} {count === 1 ? "review" : "reviews"}
+          <span className="font-semibold text-ink">{format.rating(average)}</span> ·{" "}
+          {t("common.rating.reviewCount", { count })}
         </span>
       ) : (
-        <span className="text-muted">No reviews yet</span>
+        <span className="text-muted">{t("common.rating.noReviews")}</span>
       )}
     </span>
   );

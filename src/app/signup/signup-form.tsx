@@ -1,23 +1,25 @@
 "use client";
 
+import Link from "next/link";
 import { useActionState, useId, useRef } from "react";
 import { signup } from "@/app/actions/auth";
-import { FormMessage, SubmitButton, TextInput, useFocusAfterSubmit } from "@/components/form";
+import { FormMessage, KennitalaField, SubmitButton, TextInput, useFocusAfterSubmit } from "@/components/form";
 import { cx } from "@/components/ui";
-import { idleFormState } from "@/lib/validation";
+import { useT } from "@/i18n/client";
+import { idleFormState, LIMITS } from "@/lib/form-state";
 
 const ROLES = [
   {
     value: "renter",
     name: "isRenter",
-    title: "I'm a renter",
-    body: "Review your landlords and the places you've lived.",
+    title: "auth.signup.roles.renter.title",
+    body: "auth.signup.roles.renter.body",
   },
   {
     value: "landlord",
     name: "isLandlord",
-    title: "I'm a landlord",
-    body: "List your properties and review your renters.",
+    title: "auth.signup.roles.landlord.title",
+    body: "auth.signup.roles.landlord.body",
   },
 ] as const;
 
@@ -28,6 +30,7 @@ export function SignupForm({
   next: string;
   defaultRole?: "landlord" | "renter";
 }) {
+  const t = useT();
   const [state, formAction] = useActionState(signup, idleFormState);
   const formRef = useRef<HTMLFormElement>(null);
   useFocusAfterSubmit(formRef, state);
@@ -38,16 +41,19 @@ export function SignupForm({
     state.values ? values[option.name] === "on" : defaultRole === option.value;
   const roleErrorId = useId();
   const roleHintId = useId();
+  // The only link the action returns: "Not you? Report it" when the kennitala
+  // already has an account. Shown under that field rather than in the banner.
+  const reportLink = state.status === "error" ? state.link : undefined;
 
   return (
     <form ref={formRef} action={formAction} className="space-y-5" noValidate key={JSON.stringify(values)}>
       <input type="hidden" name="next" value={next} />
-      <FormMessage state={state} />
+      <FormMessage state={reportLink ? { ...state, link: undefined } : state} />
 
       <fieldset aria-describedby={roleHintId}>
-        <legend className="text-sm font-medium text-ink">I&apos;m joining as a…</legend>
+        <legend className="text-sm font-medium text-ink">{t("auth.signup.roles.legend")}</legend>
         <p id={roleHintId} className="mt-1 text-xs text-muted">
-          Pick one or both. If you rent a home and also rent one out, you get a separate rating for each.
+          {t("auth.signup.roles.hint")}
         </p>
         <div className="mt-2 grid gap-3 sm:grid-cols-2">
           {ROLES.map((option) => (
@@ -67,8 +73,8 @@ export function SignupForm({
                 aria-describedby={errors.roles ? roleErrorId : undefined}
                 className="absolute right-4 top-4 size-4 accent-brand"
               />
-              <span className="pr-6 font-semibold text-ink">{option.title}</span>
-              <span className="mt-1 text-sm text-muted">{option.body}</span>
+              <span className="pr-6 font-semibold text-ink">{t(option.title)}</span>
+              <span className="mt-1 text-sm text-muted">{t(option.body)}</span>
             </label>
           ))}
         </div>
@@ -79,46 +85,69 @@ export function SignupForm({
         )}
       </fieldset>
 
+      <div className="space-y-1.5">
+        <KennitalaField
+          label={t("auth.fields.kennitala")}
+          name="kennitala"
+          required
+          defaultValue={values.kennitala}
+          error={errors.kennitala}
+          hint={
+            <>
+              <span className="block">{t("common.kennitala.hint")}</span>
+              <span className="mt-1 block">{t("auth.signup.kennitalaWhy")}</span>
+            </>
+          }
+        />
+        {reportLink && (
+          <p className="text-sm">
+            <Link href={reportLink.href} className="font-semibold text-brand hover:underline">
+              {reportLink.label}
+            </Link>
+          </p>
+        )}
+      </div>
       <TextInput
-        label="Name"
+        label={t("auth.fields.name")}
         name="name"
         autoComplete="name"
         required
-        maxLength={80}
+        maxLength={LIMITS.name.max}
         defaultValue={values.name}
-        hint="Shown on your profile and reviews. A company name is fine for landlords."
+        hint={t("auth.signup.nameHint")}
         error={errors.name}
       />
       <TextInput
-        label="Email"
+        label={t("auth.fields.email")}
         name="email"
         type="email"
         autoComplete="email"
         required
+        maxLength={LIMITS.email.max}
         defaultValue={values.email}
         error={errors.email}
       />
       <TextInput
-        label="Password"
+        label={t("auth.fields.password")}
         name="password"
         type="password"
         autoComplete="new-password"
         required
-        minLength={8}
-        hint="At least 8 characters."
+        minLength={LIMITS.password.min}
+        hint={t("auth.passwordHint", { count: LIMITS.password.min })}
         error={errors.password}
       />
       <TextInput
-        label="City"
+        label={t("auth.fields.city")}
         name="city"
         autoComplete="address-level2"
-        maxLength={80}
+        maxLength={LIMITS.city.max}
         defaultValue={values.city}
-        placeholder="e.g. Austin, TX"
+        placeholder={t("auth.signup.cityPlaceholder")}
         error={errors.city}
       />
-      <SubmitButton pendingLabel="Creating account…" className="w-full">
-        Create account
+      <SubmitButton pendingLabel={t("auth.signup.pending")} className="w-full">
+        {t("auth.signup.submit")}
       </SubmitButton>
     </form>
   );

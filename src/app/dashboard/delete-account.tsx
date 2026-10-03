@@ -2,21 +2,20 @@
 
 import { deleteAccount } from "@/app/actions/account";
 import { SubmitButton } from "@/components/form";
+import { useT } from "@/i18n/client";
 
 export function DeleteAccount() {
+  const t = useT();
   return (
     <form
       action={deleteAccount}
       onSubmit={(event) => {
-        const ok = window.confirm(
-          "Close your account? Your login and the reviews you wrote will be permanently deleted.",
-        );
-        if (!ok) event.preventDefault();
+        if (!window.confirm(t("account.close.confirm"))) event.preventDefault();
       }}
     >
       <input type="hidden" name="confirm" value="delete" />
-      <SubmitButton variant="danger" pendingLabel="Closing…">
-        Close my account
+      <SubmitButton variant="danger" pendingLabel={t("account.close.pending")}>
+        {t("account.close.button")}
       </SubmitButton>
     </form>
   );

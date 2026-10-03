@@ -6,23 +6,21 @@ import { RatingSummary } from "@/components/rating-summary";
 import { ReviewList } from "@/components/review-card";
 import { ReviewPanel, ReviewsHeading } from "@/components/review-panel";
 import { Avatar, buttonStyles, Card, cx, EmptyState, RoleBadge } from "@/components/ui";
+import { addressText, placeLine, streetLine } from "@/i18n/address";
+import { getFormat, getT } from "@/i18n/server";
 import { getCurrentUser } from "@/lib/auth/current-user";
-import {
-  getProperty,
-  getRatingSummary,
-  getReviewByAuthor,
-  listReviewsAbout,
-  parsePage,
-  propertyLabel,
-} from "@/lib/data";
-import { formatMonthYear } from "@/lib/format";
-import { LandlordActions } from "./landlord-actions";
+import { getProperty, getRatingSummary, getReviewByAuthor, listReviewsAbout, parsePage } from "@/lib/data";
+import { reportPath } from "@/lib/paths";
+import { LandlordActions, RelinkLandlord } from "./landlord-actions";
 
 export async function generateMetadata({ params }: PageProps<"/properties/[id]">): Promise<Metadata> {
-  const property = await getProperty((await params).id);
-  if (!property) return { title: "Property not found" };
-  const label = `${propertyLabel(property)}, ${property.city}`;
-  return { title: `${label} — reviews`, description: `Renter reviews of ${label}, ${property.region}.` };
+  const [property, t] = await Promise.all([getProperty((await params).id), getT()]);
+  if (!property) return { title: t("meta.property.notFound") };
+  const address = addressText(t, property);
+  return {
+    title: t("meta.property.title", { address }),
+    description: t("meta.property.description", { address }),
+  };
 }
 
 export default async function PropertyPage({ params, searchParams }: PageProps<"/properties/[id]">) {
@@ -32,12 +30,14 @@ export default async function PropertyPage({ params, searchParams }: PageProps<"
 
   const page = parsePage(pageParam);
   const viewer = await getCurrentUser();
-  const [summary, reviewPage, myReview] = await Promise.all([
+  const [summary, reviewPage, myReview, t, format] = await Promise.all([
     getRatingSummary({ propertyId: id }),
     listReviewsAbout({ propertyId: id }, page),
     viewer ? getReviewByAuthor(viewer.id, { propertyId: id }) : null,
+    getT(),
+    getFormat(),
   ]);
-  const label = propertyLabel(property);
+  const street = streetLine(t, property);
   const path = `/properties/${id}`;
   redirectIfPastLastPage({
     page,
@@ -46,11 +46,14 @@ export default async function PropertyPage({ params, searchParams }: PageProps<"
     basePath: path,
     hash: "reviews",
   });
-  const isOwner = Boolean(viewer && property.landlord?.id === viewer.id);
+  const landlord = property.landlord;
+  const isOwner = Boolean(viewer && landlord?.id === viewer.id);
   // Landlords can't review their own properties, so someone who reviewed this
   // one can't claim it either.
-  const canClaim = !property.landlord && !myReview;
+  const canClaim = !landlord && !myReview;
   const mayReview = !isOwner && (!viewer || viewer.isRenter);
+  // The person who added it can change its landlord while that landlord has no account.
+  const isCreator = Boolean(viewer && property.createdById === viewer.id);
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-10 sm:px-6">
@@ -59,42 +62,47 @@ export default async function PropertyPage({ params, searchParams }: PageProps<"
           <Card as="section">
             <div className="flex flex-wrap items-center gap-2">
               <RoleBadge role="property" />
-              <span className="text-xs text-muted">Listed {formatMonthYear(property.createdAt)}</span>
+              <span className="text-xs text-muted">
+                {t("properties.page.listed", { date: format.monthYear(property.createdAt) })}
+              </span>
             </div>
-            <h1 className="mt-2 wrap-anywhere text-2xl font-bold tracking-tight text-ink sm:text-3xl">
-              {label}
-            </h1>
-            <p className="mt-1 wrap-anywhere text-muted">
-              {property.city}, {property.region}
-              {property.postalCode ? ` ${property.postalCode}` : ""}
-            </p>
-            {property.description && (
-              <p className="mt-3 break-words text-ink/85">{property.description}</p>
-            )}
+            <h1 className="mt-2 wrap-anywhere text-2xl font-bold tracking-tight text-ink sm:text-3xl">{street}</h1>
+            <p className="mt-1 wrap-anywhere text-muted">{placeLine(property.postalCode)}</p>
+            {property.description && <p className="mt-3 break-words text-ink/85">{property.description}</p>}
 
             <div className="mt-5 flex flex-wrap items-center gap-3 rounded-xl bg-surface-muted px-4 py-3">
-              {property.landlord ? (
+              {landlord ? (
                 <>
-                  <Avatar name={property.landlord.name} id={property.landlord.id} size="sm" />
-                  <p className="min-w-0 grow basis-40 text-sm text-muted">
-                    Landlord:{" "}
-                    <Link
-                      href={`/landlords/${property.landlord.id}`}
-                      className="font-semibold wrap-anywhere text-ink hover:underline"
-                    >
-                      {property.landlord.name}
-                    </Link>
-                  </p>
+                  <Avatar name={landlord.name} id={landlord.id} size="sm" />
+                  <div className="min-w-0 grow basis-40">
+                    <p className="text-sm text-muted">
+                      {t.rich("properties.page.landlord", {
+                        name: (
+                          <Link
+                            href={`/landlords/${landlord.id}`}
+                            className="font-semibold wrap-anywhere text-ink hover:underline"
+                          >
+                            {landlord.name}
+                          </Link>
+                        ),
+                      })}
+                    </p>
+                    {!landlord.hasAccount && (
+                      <p className="text-xs text-muted">{t("properties.page.unconfirmed")}</p>
+                    )}
+                  </div>
                 </>
               ) : (
-                <p className="min-w-0 grow basis-40 text-sm text-muted">
-                  The landlord for this property isn&apos;t on GossipRent yet.
-                </p>
+                <p className="min-w-0 grow basis-40 text-sm text-muted">{t("properties.page.noLandlord")}</p>
               )}
               {viewer?.isLandlord && (
-                <LandlordActions
+                <LandlordActions propertyId={property.id} mode={isOwner ? "unlink" : canClaim ? "claim" : null} />
+              )}
+              {isCreator && (
+                <RelinkLandlord
                   propertyId={property.id}
-                  mode={isOwner ? "unlink" : canClaim ? "claim" : null}
+                  hasLandlord={Boolean(landlord)}
+                  editable={!landlord?.hasAccount}
                 />
               )}
             </div>
@@ -108,15 +116,20 @@ export default async function PropertyPage({ params, searchParams }: PageProps<"
                 href="#your-review"
                 className={cx(buttonStyles.base, buttonStyles.primary, "mt-6 w-full lg:hidden")}
               >
-                {myReview ? "Edit your review" : "Review this property"}
+                {myReview ? t("properties.page.editReview") : t("properties.page.reviewThis")}
               </a>
             )}
+            <p className="mt-6 text-right text-xs">
+              <Link href={reportPath("property", property.id)} className="text-muted hover:text-ink hover:underline">
+                {t("properties.page.report")}
+              </Link>
+            </p>
           </Card>
 
           <section aria-labelledby="reviews-heading" id="reviews">
             <div className="mb-4">
               <ReviewsHeading id="reviews-heading" count={reviewPage.total} />
-              <p className="text-sm text-muted">What renters say about living here.</p>
+              <p className="text-sm text-muted">{t("properties.page.reviewsIntro")}</p>
             </div>
             {reviewPage.items.length > 0 ? (
               <div className="space-y-4">
@@ -124,9 +137,7 @@ export default async function PropertyPage({ params, searchParams }: PageProps<"
                 <Pagination page={page} pageCount={reviewPage.pageCount} basePath={path} hash="reviews" />
               </div>
             ) : (
-              <EmptyState title="No reviews for this property yet">
-                Live here, or used to? Be the first to share what it&apos;s like.
-              </EmptyState>
+              <EmptyState title={t("properties.page.noReviewsTitle")}>{t("properties.page.noReviewsBody")}</EmptyState>
             )}
           </section>
         </div>
@@ -135,15 +146,11 @@ export default async function PropertyPage({ params, searchParams }: PageProps<"
           <ReviewPanel
             kind="property"
             subjectId={property.id}
-            subjectName={label}
+            subjectName={street}
             viewer={viewer}
             existing={myReview}
             returnTo={path}
-            ownerNote={
-              isOwner
-                ? "You're the landlord for this property. Reviews from your renters appear here."
-                : undefined
-            }
+            ownerNote={isOwner ? t("properties.page.ownerNote") : undefined}
           />
         </aside>
       </div>

@@ -3,9 +3,11 @@
 import { useActionState, useRef } from "react";
 import { changePassword, signOutOtherDevices } from "@/app/actions/account";
 import { FormMessage, SubmitButton, TextInput, useFocusAfterSubmit } from "@/components/form";
-import { idleFormState } from "@/lib/validation";
+import { useT } from "@/i18n/client";
+import { idleFormState, LIMITS } from "@/lib/form-state";
 
 export function PasswordForm() {
+  const t = useT();
   const [state, formAction] = useActionState(changePassword, idleFormState);
   const formRef = useRef<HTMLFormElement>(null);
   useFocusAfterSubmit(formRef, state);
@@ -14,7 +16,7 @@ export function PasswordForm() {
     <form ref={formRef} action={formAction} className="space-y-4" noValidate>
       <FormMessage state={state} />
       <TextInput
-        label="Current password"
+        label={t("account.password.current")}
         name="currentPassword"
         type="password"
         autoComplete="current-password"
@@ -22,37 +24,38 @@ export function PasswordForm() {
         error={errors.currentPassword}
       />
       <TextInput
-        label="New password"
+        label={t("account.password.newPassword")}
         name="newPassword"
         type="password"
         autoComplete="new-password"
         required
-        minLength={8}
-        hint="At least 8 characters."
+        minLength={LIMITS.password.min}
+        hint={t("auth.passwordHint", { count: LIMITS.password.min })}
         error={errors.newPassword}
       />
       <TextInput
-        label="Confirm new password"
+        label={t("account.password.confirm")}
         name="confirmPassword"
         type="password"
         autoComplete="new-password"
         required
         error={errors.confirmPassword}
       />
-      <SubmitButton pendingLabel="Changing…">Change password</SubmitButton>
+      <SubmitButton pendingLabel={t("account.password.pending")}>{t("account.password.submit")}</SubmitButton>
     </form>
   );
 }
 
 export function SignOutOthersForm() {
+  const t = useT();
   const [state, formAction] = useActionState(signOutOtherDevices, idleFormState);
   const formRef = useRef<HTMLFormElement>(null);
   useFocusAfterSubmit(formRef, state);
   return (
     <form ref={formRef} action={formAction} className="space-y-3">
       <FormMessage state={state} />
-      <SubmitButton variant="secondary" pendingLabel="Signing out…">
-        Sign out other devices
+      <SubmitButton variant="secondary" pendingLabel={t("account.password.signingOut")}>
+        {t("account.password.signOutOthers")}
       </SubmitButton>
     </form>
   );

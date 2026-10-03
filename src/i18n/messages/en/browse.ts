@@ -1,0 +1,72 @@
+import type { Shape } from "../../types";
+import type is from "../is/browse";
+
+export default {
+  filters: {
+    label: "Search",
+    button: "Search",
+    sortLabel: "Sort by",
+    clear: "Clear search",
+  },
+  sort: {
+    top: "Top rated",
+    most: "Most reviewed",
+    newest: "Newest",
+    name: "A–Z",
+  },
+  landlords: {
+    title: "Landlords",
+    description: "See how landlords are rated by the people who've rented from them.",
+    placeholder: "Search landlords by name or city",
+    count: { one: "{count} landlord", other: "{count} landlords" },
+    countMatching: { one: "{count} landlord matching “{query}”", other: "{count} landlords matching “{query}”" },
+    noneMatching: "No landlords match “{query}”",
+    none: "No landlords yet",
+    empty: "Landlords show up here once they sign up or someone reviews them.",
+    notListed:
+      "If your landlord isn't on GossipRent yet, you can write the first review with their kennitala, or review the property you rented.",
+  },
+  renters: {
+    title: "Renters",
+    description: "See how renters are rated by the landlords they've rented from.",
+    placeholder: "Search renters by name or city",
+    count: { one: "{count} renter", other: "{count} renters" },
+    countMatching: { one: "{count} renter matching “{query}”", other: "{count} renters matching “{query}”" },
+    noneMatching: "No renters match “{query}”",
+    none: "No renters yet",
+    empty: "Renters show up here once they sign up or someone reviews them.",
+    notListed: "If your renter isn't on GossipRent yet, you can write the first review with their kennitala.",
+  },
+  tryAgain: "Try a different name or city.",
+  writeReview: "Write a review",
+  reviewPropertyInstead: "Review the place you rented instead",
+  card: {
+    properties: { one: "{count} property", other: "{count} properties" },
+    noProperties: "No properties yet",
+    alsoRenter: "Also a renter",
+    alsoLandlord: "Also a landlord",
+    landlord: "Landlord: {name}",
+    landlordUnconfirmed: "Landlord: {name} (not confirmed)",
+    noLandlord: "Landlord not on GossipRent yet",
+  },
+  results: {
+    title: "Search",
+    description: "Find landlords, renters, and properties by name, city, or address.",
+    label: "Search",
+    placeholder: "Search a name, address, or postcode",
+    button: "Search",
+    heading: "Results for “{query}”",
+    count: { one: "{count} match", other: "{count} matches" },
+    noneTitle: "Nothing matched your search",
+    noneBody: "Try a shorter name, just the city, or the street name. Can't find the place you rent? {add}.",
+    addIt: "Add it",
+    landlords: "Landlords",
+    properties: "Properties",
+    renters: "Renters",
+    seeAll: {
+      landlords: "See all {count} →",
+      properties: "See all {count} →",
+      renters: "See all {count} →",
+    },
+  },
+} satisfies Shape<typeof is>;

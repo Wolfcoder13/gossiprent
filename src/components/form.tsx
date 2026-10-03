@@ -1,9 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useId, type ReactNode, type RefObject } from "react";
+import { useEffect, useId, type HTMLAttributes, type ReactNode, type RefObject } from "react";
 import { useFormStatus } from "react-dom";
-import type { FormState } from "@/lib/validation";
+import { useT } from "@/i18n/client";
+import type { FormState } from "@/lib/form-state";
 import { buttonStyles, cx, Notice } from "./ui";
 
 const inputStyles =
@@ -20,6 +21,7 @@ type FieldProps = {
 
 /** Label + control + hint + error, wired up with ids for screen readers. */
 function Field({ label, name, error, hint, required, children }: FieldProps) {
+  const t = useT();
   const id = useId();
   const inputId = `${name}-${id}`;
   const hintId = hint ? `${inputId}-hint` : undefined;
@@ -29,7 +31,7 @@ function Field({ label, name, error, hint, required, children }: FieldProps) {
     <div className="space-y-1.5">
       <label htmlFor={inputId} className="block text-sm font-medium text-ink">
         {label}
-        {!required && <span className="font-normal text-muted"> (optional)</span>}
+        {!required && <span className="font-normal text-muted"> {t("common.optional")}</span>}
       </label>
       {children({ inputId, describedBy, invalid: Boolean(errorId) })}
       {hint && (
@@ -58,6 +60,10 @@ type InputProps = {
   maxLength?: number;
   minLength?: number;
   placeholder?: string;
+  inputMode?: HTMLAttributes<HTMLInputElement>["inputMode"];
+  spellCheck?: boolean;
+  autoCapitalize?: "off" | "none" | "on" | "sentences" | "words" | "characters";
+  autoCorrect?: "on" | "off";
 };
 
 export function TextInput({ label, name, error, hint, required, ...rest }: InputProps) {
@@ -106,11 +112,51 @@ export function TextArea({
   );
 }
 
+/**
+ * A kennitala input. Text with a numeric keyboard (never type="number", which
+ * would drop the hyphen and leading zeros); the server accepts "123456-7890",
+ * "123456 7890" or "1234567890". `hint` defaults to the format; pass null to hide it.
+ */
+export function KennitalaField({
+  label,
+  name,
+  defaultValue,
+  error,
+  hint,
+  required,
+}: {
+  label: string;
+  name: string;
+  defaultValue?: string;
+  error?: string[];
+  hint?: ReactNode;
+  required?: boolean;
+}) {
+  const t = useT();
+  return (
+    <TextInput
+      label={label}
+      name={name}
+      defaultValue={defaultValue}
+      error={error}
+      hint={hint === undefined ? t("common.kennitala.hint") : hint}
+      required={required}
+      inputMode="numeric"
+      autoComplete="off"
+      maxLength={13}
+      spellCheck={false}
+      autoCapitalize="off"
+      autoCorrect="off"
+    />
+  );
+}
+
 export function Select({
   label,
   name,
   error,
   hint,
+  required,
   defaultValue,
   children,
 }: {
@@ -118,15 +164,17 @@ export function Select({
   name: string;
   error?: string[];
   hint?: ReactNode;
+  required?: boolean;
   defaultValue?: string;
   children: ReactNode;
 }) {
   return (
-    <Field label={label} name={name} error={error} hint={hint}>
+    <Field label={label} name={name} error={error} hint={hint} required={required}>
       {({ inputId, describedBy, invalid }) => (
         <select
           id={inputId}
           name={name}
+          required={required}
           defaultValue={defaultValue}
           aria-invalid={invalid || undefined}
           aria-describedby={describedBy}
@@ -139,22 +187,33 @@ export function Select({
   );
 }
 
-/** Submit button that disables itself and shows `pendingLabel` while the form is submitting. */
+/**
+ * Submit button that disables itself while the form is submitting. With
+ * `name`/`value` (e.g. intent=check next to intent=save), only the button that
+ * was pressed shows its `pendingLabel`.
+ */
 export function SubmitButton({
   children,
   pendingLabel,
   variant = "primary",
   className,
+  name,
+  value,
 }: {
   children: ReactNode;
   pendingLabel: ReactNode;
   variant?: "primary" | "secondary" | "danger";
   className?: string;
+  name?: string;
+  value?: string;
 }) {
-  const { pending } = useFormStatus();
+  const { pending, data } = useFormStatus();
+  const pressed = pending && (name === undefined || data?.get(name) === value);
   return (
     <button
       type="submit"
+      name={name}
+      value={value}
       // Not `disabled`: a disabled button loses keyboard focus mid-submit.
       aria-disabled={pending}
       onClick={(event) => {
@@ -162,7 +221,7 @@ export function SubmitButton({
       }}
       className={cx(buttonStyles.base, buttonStyles[variant], "px-5 py-2.5", className)}
     >
-      {pending ? pendingLabel : children}
+      {pressed ? pendingLabel : children}
     </button>
   );
 }

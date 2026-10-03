@@ -8,9 +8,8 @@ import {
   parsePage,
   parseQuery,
   parseSort,
-  propertyLabel,
   REVIEWS_PAGE_SIZE,
-  searchPatterns,
+  searchTerms,
 } from "@/lib/data";
 
 describe("isUuid", () => {
@@ -41,7 +40,7 @@ describe("isUuid", () => {
 
 describe("likePattern", () => {
   it("wraps the query in % wildcards", () => {
-    expect(likePattern("austin")).toBe("%austin%");
+    expect(likePattern("akureyri")).toBe("%akureyri%");
     expect(likePattern("")).toBe("%%");
   });
 
@@ -108,7 +107,7 @@ describe("parseSort", () => {
 
 describe("parseQuery", () => {
   it("trims the query", () => {
-    expect(parseQuery("  austin  ")).toBe("austin");
+    expect(parseQuery("  akureyri  ")).toBe("akureyri");
     expect(parseQuery("   ")).toBe("");
   });
 
@@ -118,7 +117,7 @@ describe("parseQuery", () => {
   });
 
   it("uses the first value of a repeated param", () => {
-    expect(parseQuery([" maria ", "sam"])).toBe("maria");
+    expect(parseQuery([" sigrun ", "kari"])).toBe("sigrun");
   });
 
   it("limits the query to 100 characters", () => {
@@ -138,33 +137,31 @@ describe("parseQuery", () => {
   });
 
   it("repairs lone surrogates sent in the URL", () => {
-    expect(parseQuery("austin\uD83D").isWellFormed()).toBe(true);
-    expect(parseQuery("\uDE00 austin").isWellFormed()).toBe(true);
+    expect(parseQuery("akureyri\uD83D").isWellFormed()).toBe(true);
+    expect(parseQuery("\uDE00 akureyri").isWellFormed()).toBe(true);
   });
 
   it("is empty when the query has no words (e.g. just punctuation)", () => {
     expect(parseQuery(",")).toBe("");
     expect(parseQuery(" , ,, ")).toBe("");
     expect(parseQuery("\t,\n")).toBe("");
-    expect(parseQuery([",", "austin"])).toBe("");
+    expect(parseQuery([",", "akureyri"])).toBe("");
     expect(parseQuery("\u0000,\u0000")).toBe("");
   });
 
   it("keeps a query that has words between the punctuation", () => {
-    expect(parseQuery(", austin ,")).toBe(", austin ,");
+    expect(parseQuery(", akureyri ,")).toBe(", akureyri ,");
     expect(parseQuery("%")).toBe("%");
     expect(parseQuery("_")).toBe("_");
   });
-});
 
-describe("propertyLabel", () => {
-  it("includes the unit when there is one", () => {
-    expect(propertyLabel({ address: "1408 E 6th St", unit: "2B" })).toBe("1408 E 6th St, Unit 2B");
-  });
-
-  it("is just the address without a unit", () => {
-    expect(propertyLabel({ address: "2210 Riverside Dr", unit: null })).toBe("2210 Riverside Dr");
-    expect(propertyLabel({ address: "2210 Riverside Dr", unit: "" })).toBe("2210 Riverside Dr");
+  it("is empty for anything shaped like a kennitala, which must never be searched or echoed", () => {
+    for (const value of ["150385-3579", " 1503853579 ", "150385 3579", "123456-7890", ["0101302989", "x"]]) {
+      expect(parseQuery(value), JSON.stringify(value)).toBe("");
+    }
+    // Other numbers are searched as usual.
+    expect(parseQuery("Njálsgata 23")).toBe("Njálsgata 23");
+    expect(parseQuery("101")).toBe("101");
   });
 });
 
@@ -179,8 +176,8 @@ describe("parseQuery and NUL characters", () => {
   it("drops NUL characters (Postgres can't compare text containing them)", () => {
     expect(parseQuery("\u0000")).toBe("");
     expect(parseQuery("a\u0000b")).toBe("ab");
-    expect(parseQuery(" \u0000 austin \u0000 ")).toBe("austin");
-    expect(parseQuery(["\u0000maria", "sam"])).toBe("maria");
+    expect(parseQuery(" \u0000 akureyri \u0000 ")).toBe("akureyri");
+    expect(parseQuery(["\u0000sigrun", "kari"])).toBe("sigrun");
   });
 
   it("removes NULs before applying the length limit", () => {
@@ -194,60 +191,53 @@ describe("parseQuery and NUL characters", () => {
   });
 });
 
-describe("searchPatterns", () => {
+describe("searchTerms", () => {
   it("is empty for a missing or blank query", () => {
-    expect(searchPatterns(undefined)).toEqual([]);
-    expect(searchPatterns("")).toEqual([]);
-    expect(searchPatterns("   ")).toEqual([]);
-    expect(searchPatterns(" , ,, ")).toEqual([]);
+    expect(searchTerms(undefined)).toEqual([]);
+    expect(searchTerms("")).toEqual([]);
+    expect(searchTerms("   ")).toEqual([]);
+    expect(searchTerms(" , ,, ")).toEqual([]);
   });
 
-  it("makes one pattern per word, keeping the casing as typed (ILIKE ignores case)", () => {
-    expect(searchPatterns("austin")).toEqual(["%austin%"]);
-    expect(searchPatterns("Maria Gonzalez")).toEqual(["%Maria%", "%Gonzalez%"]);
+  it("folds each word like the stored search columns (lower case, no accents)", () => {
+    expect(searchTerms("Þórdís")).toEqual(["thordis"]);
+    expect(searchTerms("Sigrún Helgadóttir")).toEqual(["sigrun", "helgadottir"]);
+    expect(searchTerms("KÓPAVOGUR")).toEqual(["kopavogur"]);
+    expect(searchTerms("Ægisíða")).toEqual(["aegisida"]);
   });
 
-  it("doesn't lower-case in JavaScript, which differs from Postgres for some letters", () => {
-    // JS would turn the final Σ into ς and İ into i + a combining dot.
-    expect(searchPatterns("ΟΔΟΣ İstiklal")).toEqual(["%ΟΔΟΣ%", "%İstiklal%"]);
+  it("splits on commas and any whitespace, so 'Njálsgata 23, Reykjavík' matches address and place", () => {
+    expect(searchTerms("Njálsgata 23, Reykjavík")).toEqual(["njalsgata", "23", "reykjavik"]);
+    expect(searchTerms("Njálsgata,101")).toEqual(["njalsgata", "101"]);
+    expect(searchTerms("  Hamraborg\t14\n0503 ,, Kópavogur  ")).toEqual(["hamraborg", "14", "0503", "kopavogur"]);
   });
 
-  it("splits on commas and any whitespace, so 'Austin, TX' matches city and region", () => {
-    expect(searchPatterns("Austin, TX")).toEqual(["%Austin%", "%TX%"]);
-    expect(searchPatterns("Austin,TX")).toEqual(["%Austin%", "%TX%"]);
-    expect(searchPatterns("  4521\tN\nClark ,, Chicago  ")).toEqual(["%4521%", "%N%", "%Clark%", "%Chicago%"]);
-  });
-
-  it("handles a full property label, unit included", () => {
-    expect(searchPatterns("1408 E 6th St, Unit 2B")).toEqual(["%1408%", "%E%", "%6th%", "%St%", "%Unit%", "%2B%"]);
-  });
-
-  it("escapes LIKE wildcards in each word", () => {
-    expect(searchPatterns("100% a_b c\\d")).toEqual(["%100\\%%", "%a\\_b%", "%c\\\\d%"]);
-    expect(searchPatterns("% _")).toEqual(["%\\%%", "%\\_%"]);
+  it("keeps LIKE wildcards as typed (likePattern escapes them later)", () => {
+    expect(searchTerms("100% a_b")).toEqual(["100%", "a_b"]);
+    expect(searchTerms("100% a_b").map(likePattern)).toEqual(["%100\\%%", "%a\\_b%"]);
   });
 
   it("keeps at most 8 words", () => {
     const words = Array.from({ length: 12 }, (_, i) => `w${i}`);
-    expect(searchPatterns(words.join(" "))).toEqual(words.slice(0, 8).map((w) => `%${w}%`));
+    expect(searchTerms(words.join(" "))).toEqual(words.slice(0, 8));
   });
 
-  it("drops repeated words, ignoring case (the first spelling wins)", () => {
-    expect(searchPatterns("st St ST")).toEqual(["%st%"]);
-    expect(searchPatterns("Main St, main st")).toEqual(["%Main%", "%St%"]);
+  it("drops repeated words, ignoring case and accents", () => {
+    expect(searchTerms("gata Gata GÖTU götu")).toEqual(["gata", "gotu"]);
+    expect(searchTerms("Þór thor ÞÓR")).toEqual(["thor"]);
   });
 
   it("drops repeats before applying the 8-word cap, so they can't push real words out", () => {
     const query = `${"a ".repeat(20)}b c d e f g h i j`;
-    expect(searchPatterns(query)).toEqual(["a", "b", "c", "d", "e", "f", "g", "h"].map((w) => `%${w}%`));
+    expect(searchTerms(query)).toEqual(["a", "b", "c", "d", "e", "f", "g", "h"]);
   });
 });
 
-describe("parseQuery and searchPatterns together", () => {
+describe("parseQuery and searchTerms together", () => {
   it("a non-empty query always has at least one search word", () => {
     for (const input of [",", " , ", "x", ", x", "%", "😀", "\u0000,", "a".repeat(300), `${",".repeat(99)}a`]) {
       const query = parseQuery(input);
-      if (query) expect(searchPatterns(query).length, JSON.stringify(input)).toBeGreaterThan(0);
+      if (query) expect(searchTerms(query).length, JSON.stringify(input)).toBeGreaterThan(0);
     }
   });
 });

@@ -1,16 +1,22 @@
 import type { ReactNode } from "react";
+import { getT } from "@/i18n/server";
 import type { PersonSort } from "@/lib/data";
-import { buttonStyles, cx } from "./ui";
+import { SearchBox } from "./search-box";
 
-const SORTS: { value: PersonSort; label: string }[] = [
-  { value: "top", label: "Top rated" },
-  { value: "most", label: "Most reviewed" },
-  { value: "newest", label: "Newest" },
-  { value: "name", label: "A–Z" },
-];
+// Message keys (translated per request).
+const SORTS = [
+  { value: "top", label: "browse.sort.top" },
+  { value: "most", label: "browse.sort.most" },
+  { value: "newest", label: "browse.sort.newest" },
+  { value: "name", label: "browse.sort.name" },
+] as const satisfies readonly { value: PersonSort; label: string }[];
 
-/** Search + sort controls for a directory. A plain GET form, so it works without JavaScript. */
-export function DirectoryFilters({
+/**
+ * Search + sort controls for a directory. A plain GET form, so it works
+ * without JavaScript; a kennitala typed into it is never sent (see SearchBox).
+ * `placeholder` is already translated. An async Server Component.
+ */
+export async function DirectoryFilters({
   basePath,
   query,
   sort,
@@ -21,25 +27,19 @@ export function DirectoryFilters({
   sort: PersonSort;
   placeholder: string;
 }) {
+  const t = await getT();
   return (
-    <form
+    <SearchBox
       action={basePath}
-      role="search"
-      className="flex flex-col gap-2 rounded-2xl border border-line bg-surface p-3 shadow-sm sm:flex-row sm:items-center"
+      inputId="directory-q"
+      label={t("browse.filters.label")}
+      placeholder={placeholder}
+      buttonLabel={t("browse.filters.button")}
+      defaultValue={query}
+      variant="bar"
     >
-      <label htmlFor="directory-q" className="sr-only">
-        Search
-      </label>
-      <input
-        id="directory-q"
-        name="q"
-        type="search"
-        defaultValue={query}
-        placeholder={placeholder}
-        className="min-w-0 flex-1 rounded-xl border border-line-input bg-surface px-4 py-2.5 text-ink placeholder:text-muted focus:border-brand focus:outline-none focus:ring-2 focus:ring-focus/40"
-      />
       <label htmlFor="directory-sort" className="sr-only">
-        Sort by
+        {t("browse.filters.sortLabel")}
       </label>
       <select
         id="directory-sort"
@@ -49,14 +49,11 @@ export function DirectoryFilters({
       >
         {SORTS.map((option) => (
           <option key={option.value} value={option.value}>
-            {option.label}
+            {t(option.label)}
           </option>
         ))}
       </select>
-      <button type="submit" className={cx(buttonStyles.base, buttonStyles.primary, "py-2.5")}>
-        Search
-      </button>
-    </form>
+    </SearchBox>
   );
 }
 

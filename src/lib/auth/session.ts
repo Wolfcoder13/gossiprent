@@ -1,6 +1,6 @@
 import "server-only";
 import { createHash, randomBytes } from "node:crypto";
-import { and, eq, gt, isNull, lt, ne } from "drizzle-orm";
+import { and, eq, gt, isNotNull, lt, ne } from "drizzle-orm";
 import { cookies } from "next/headers";
 import { getDb } from "@/db";
 import { sessions, users } from "@/db/schema";
@@ -58,17 +58,22 @@ export async function deleteOtherSessions(userId: string): Promise<void> {
     );
 }
 
+/** The signed-in account. Never carries the kennitala (see getOwnKennitala in src/lib/people.ts). */
 export type SessionUser = {
   id: string;
   name: string;
   email: string;
   isLandlord: boolean;
   isRenter: boolean;
+  isCompany: boolean;
   city: string | null;
   bio: string | null;
 };
 
-/** The signed-in user for the current request's cookie, or null. */
+/**
+ * The signed-in user for the current request's cookie, or null. Only accounts
+ * can have a session: closing one clears its password hash (and its sessions).
+ */
 export async function readSessionUser(): Promise<SessionUser | null> {
   const cookieStore = await cookies();
   const token = cookieStore.get(SESSION_COOKIE)?.value;
@@ -82,6 +87,7 @@ export async function readSessionUser(): Promise<SessionUser | null> {
       email: users.email,
       isLandlord: users.isLandlord,
       isRenter: users.isRenter,
+      isCompany: users.isCompany,
       city: users.city,
       bio: users.bio,
     })
@@ -91,9 +97,10 @@ export async function readSessionUser(): Promise<SessionUser | null> {
       and(
         eq(sessions.id, hashToken(token)),
         gt(sessions.expiresAt, new Date()),
-        isNull(users.deletedAt),
+        isNotNull(users.passwordHash),
       ),
     )
     .limit(1);
-  return row ?? null;
+  // An account always has an email (users_account_complete).
+  return row ? { ...row, email: row.email! } : null;
 }

@@ -1,5 +1,5 @@
 {
-  "id": "ffd03f08-a270-4e78-b9a4-4614149fec00",
+  "id": "87bde859-a7b0-48fe-a12e-e9d60ee754fd",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -82,29 +82,29 @@
           "primaryKey": false,
           "notNull": false
         },
-        "city": {
-          "name": "city",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "region": {
-          "name": "region",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
         "postal_code": {
           "name": "postal_code",
-          "type": "text",
+          "type": "smallint",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "description": {
           "name": "description",
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "address_sort": {
+          "name": "address_sort",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "address_search": {
+          "name": "address_search",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
         },
         "landlord_id": {
           "name": "landlord_id",
@@ -142,11 +142,26 @@
           "method": "btree",
           "with": {}
         },
-        "properties_city_idx": {
-          "name": "properties_city_idx",
+        "properties_created_by_id_idx": {
+          "name": "properties_created_by_id_idx",
           "columns": [
             {
-              "expression": "city",
+              "expression": "created_by_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "properties_postal_code_idx": {
+          "name": "properties_postal_code_idx",
+          "columns": [
+            {
+              "expression": "postal_code",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -161,27 +176,15 @@
           "name": "properties_address_unique",
           "columns": [
             {
-              "expression": "lower(\"address\")",
+              "expression": "address_search",
+              "isExpression": false,
               "asc": true,
-              "isExpression": true,
               "nulls": "last"
             },
             {
-              "expression": "lower(coalesce(\"unit\", ''))",
+              "expression": "postal_code",
+              "isExpression": false,
               "asc": true,
-              "isExpression": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "lower(\"city\")",
-              "asc": true,
-              "isExpression": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "lower(\"region\")",
-              "asc": true,
-              "isExpression": true,
               "nulls": "last"
             }
           ],
@@ -202,7 +205,7 @@
           "columnsTo": [
             "id"
           ],
-          "onDelete": "set null",
+          "onDelete": "restrict",
           "onUpdate": "no action"
         },
         "properties_created_by_id_users_id_fk": {
@@ -211,6 +214,119 @@
           "tableTo": "users",
           "columnsFrom": [
             "created_by_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "properties_postal_code_range": {
+          "name": "properties_postal_code_range",
+          "value": "\"properties\".\"postal_code\" between 100 and 999"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.reports": {
+      "name": "reports",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "target_kind": {
+          "name": "target_kind",
+          "type": "report_target",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "target_id": {
+          "name": "target_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "reason": {
+          "name": "reason",
+          "type": "report_reason",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "details": {
+          "name": "details",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "contact_email": {
+          "name": "contact_email",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "reporter_id": {
+          "name": "reporter_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "resolved_at": {
+          "name": "resolved_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "resolution": {
+          "name": "resolution",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "reports_unresolved_idx": {
+          "name": "reports_unresolved_idx",
+          "columns": [
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"reports\".\"resolved_at\" is null",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "reports_reporter_id_users_id_fk": {
+          "name": "reports_reporter_id_users_id_fk",
+          "tableFrom": "reports",
+          "tableTo": "users",
+          "columnsFrom": [
+            "reporter_id"
           ],
           "columnsTo": [
             "id"
@@ -448,7 +564,7 @@
           "columnsTo": [
             "id"
           ],
-          "onDelete": "cascade",
+          "onDelete": "restrict",
           "onUpdate": "no action"
         },
         "reviews_property_id_properties_id_fk": {
@@ -461,7 +577,7 @@
           "columnsTo": [
             "id"
           ],
-          "onDelete": "cascade",
+          "onDelete": "restrict",
           "onUpdate": "no action"
         }
       },
@@ -563,8 +679,33 @@
           "notNull": true,
           "default": "gen_random_uuid()"
         },
+        "kennitala": {
+          "name": "kennitala",
+          "type": "char(10)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "is_company": {
+          "name": "is_company",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
         "name": {
           "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name_sort": {
+          "name": "name_sort",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name_search": {
+          "name": "name_search",
           "type": "text",
           "primaryKey": false,
           "notNull": true
@@ -573,13 +714,19 @@
           "name": "email",
           "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
         },
         "password_hash": {
           "name": "password_hash",
           "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
+        },
+        "joined_at": {
+          "name": "joined_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
         },
         "is_landlord": {
           "name": "is_landlord",
@@ -613,15 +760,24 @@
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
-        },
-        "deleted_at": {
-          "name": "deleted_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
         }
       },
       "indexes": {
+        "users_kennitala_unique": {
+          "name": "users_kennitala_unique",
+          "columns": [
+            {
+              "expression": "kennitala",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "users_email_unique": {
           "name": "users_email_unique",
           "columns": [
@@ -668,6 +824,21 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "users_name_sort_idx": {
+          "name": "users_name_sort_idx",
+          "columns": [
+            {
+              "expression": "name_sort",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {},
@@ -675,15 +846,49 @@
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {
+        "users_kennitala_digits": {
+          "name": "users_kennitala_digits",
+          "value": "\"users\".\"kennitala\" ~ '^[0-9]{10}$'"
+        },
         "users_has_a_role": {
           "name": "users_has_a_role",
           "value": "\"users\".\"is_landlord\" or \"users\".\"is_renter\""
+        },
+        "users_account_complete": {
+          "name": "users_account_complete",
+          "value": "(\"users\".\"email\" is null) = (\"users\".\"password_hash\" is null) and (\"users\".\"email\" is null) = (\"users\".\"joined_at\" is null)"
+        },
+        "users_profile_text_needs_account": {
+          "name": "users_profile_text_needs_account",
+          "value": "\"users\".\"email\" is not null or (\"users\".\"city\" is null and \"users\".\"bio\" is null)"
         }
       },
       "isRLSEnabled": false
     }
   },
   "enums": {
+    "public.report_reason": {
+      "name": "report_reason",
+      "schema": "public",
+      "values": [
+        "wrong_person",
+        "wrong_name",
+        "false_or_abusive",
+        "personal_data",
+        "identity_claimed",
+        "other"
+      ]
+    },
+    "public.report_target": {
+      "name": "report_target",
+      "schema": "public",
+      "values": [
+        "review",
+        "profile",
+        "property",
+        "account"
+      ]
+    },
     "public.review_kind": {
       "name": "review_kind",
       "schema": "public",

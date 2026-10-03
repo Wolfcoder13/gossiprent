@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { getT } from "@/i18n/server";
 import { pageHref } from "@/lib/paths";
 import { buttonStyles, cx } from "./ui";
 
@@ -19,8 +20,8 @@ export function redirectIfPastLastPage(options: {
   if (total > 0 && page > pageCount) redirect(pageHref(basePath, pageCount, params, hash));
 }
 
-/** Previous / next links that keep the other search params (q, sort…). */
-export function Pagination({
+/** Previous / next links that keep the other search params (q, sort…). A Server Component. */
+export async function Pagination({
   page,
   pageCount,
   basePath,
@@ -35,32 +36,33 @@ export function Pagination({
 }) {
   if (pageCount <= 1) return null;
 
+  const t = await getT();
   const href = (target: number) => pageHref(basePath, target, params, hash);
 
   const linkClass = cx(buttonStyles.base, buttonStyles.secondary);
   const disabledClass = cx(linkClass, "pointer-events-none opacity-40");
 
   return (
-    <nav aria-label="Pagination" className="flex items-center justify-between gap-4 pt-2">
+    <nav aria-label={t("common.pagination.label")} className="flex items-center justify-between gap-4 pt-2">
       {page > 1 ? (
         <Link href={href(page - 1)} className={linkClass} rel="prev">
-          ← Previous
+          {t("common.pagination.previous")}
         </Link>
       ) : (
         <span className={disabledClass} aria-hidden>
-          ← Previous
+          {t("common.pagination.previous")}
         </span>
       )}
       <span className="text-sm text-muted">
-        Page {page} of {pageCount}
+        {t("common.pagination.status", { page, pageCount })}
       </span>
       {page < pageCount ? (
         <Link href={href(page + 1)} className={linkClass} rel="next">
-          Next →
+          {t("common.pagination.next")}
         </Link>
       ) : (
         <span className={disabledClass} aria-hidden>
-          Next →
+          {t("common.pagination.next")}
         </span>
       )}
     </nav>

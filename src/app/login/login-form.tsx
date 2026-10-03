@@ -3,9 +3,11 @@
 import { useActionState, useRef } from "react";
 import { login } from "@/app/actions/auth";
 import { FormMessage, SubmitButton, TextInput, useFocusAfterSubmit } from "@/components/form";
-import { idleFormState } from "@/lib/validation";
+import { useT } from "@/i18n/client";
+import { idleFormState, LIMITS } from "@/lib/form-state";
 
 export function LoginForm({ next }: { next: string }) {
+  const t = useT();
   const [state, formAction] = useActionState(login, idleFormState);
   const formRef = useRef<HTMLFormElement>(null);
   useFocusAfterSubmit(formRef, state);
@@ -15,24 +17,25 @@ export function LoginForm({ next }: { next: string }) {
       <input type="hidden" name="next" value={next} />
       <FormMessage state={state} />
       <TextInput
-        label="Email"
+        label={t("auth.fields.email")}
         name="email"
         type="email"
         autoComplete="email"
         required
+        maxLength={LIMITS.email.max}
         defaultValue={state.values?.email}
         error={errors.email}
       />
       <TextInput
-        label="Password"
+        label={t("auth.fields.password")}
         name="password"
         type="password"
         autoComplete="current-password"
         required
         error={errors.password}
       />
-      <SubmitButton pendingLabel="Logging in…" className="w-full">
-        Log in
+      <SubmitButton pendingLabel={t("auth.login.pending")} className="w-full">
+        {t("auth.login.submit")}
       </SubmitButton>
     </form>
   );

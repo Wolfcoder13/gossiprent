@@ -6,7 +6,8 @@
 // `npm run dev` first — the local database can only be opened by one process).
 // Refuses to touch a database that already has users.
 import { closeDatabase, connect, getDatabaseMode } from "../src/db/connect";
-import { DEMO_PASSWORD, seedDemoData } from "../src/db/seed";
+import { DEMO_PASSWORD } from "../src/db/demo-people";
+import { seedDemoData } from "../src/db/seed";
 
 for (const file of [".env.local", ".env"]) {
   try {
@@ -27,7 +28,7 @@ async function main() {
       console.log(
         `[seed] Added demo data to the ${mode} database. ` +
           `Every demo account uses the password "${DEMO_PASSWORD}" ` +
-          "(e.g. jordan@example.com, maria@example.com).",
+          "(e.g. sigrun@example.com, kari@example.com).",
       );
     } else {
       console.log("[seed] The database already has users — nothing to do.");

@@ -1,27 +1,42 @@
 import Link from "next/link";
 import type { UserRole } from "@/db/schema";
+import { getT } from "@/i18n/server";
 import { listPeople, type PersonSort } from "@/lib/data";
-import { plural } from "@/lib/format";
 import { CardGrid, PersonCard } from "./cards";
 import { DirectoryFilters, DirectoryLayout } from "./directory";
 import { Pagination, redirectIfPastLastPage } from "./pagination";
 import { ButtonLink, EmptyState, PageHeader } from "./ui";
 
-const COPY: Record<UserRole, { title: string; description: string; noun: [string, string]; empty: string }> = {
+// Message keys per role (one whole sentence per role; see the writing rules).
+const COPY = {
   landlord: {
-    title: "Landlords",
-    description: "See how landlords are rated by the people who've rented from them.",
-    noun: ["landlord", "landlords"],
-    empty: "Landlords show up here once they create an account.",
+    title: "browse.landlords.title",
+    description: "browse.landlords.description",
+    placeholder: "browse.landlords.placeholder",
+    count: "browse.landlords.count",
+    countMatching: "browse.landlords.countMatching",
+    noneMatching: "browse.landlords.noneMatching",
+    none: "browse.landlords.none",
+    empty: "browse.landlords.empty",
+    notListed: "browse.landlords.notListed",
   },
   renter: {
-    title: "Renters",
-    description: "See how renters are rated by the landlords they've rented from.",
-    noun: ["renter", "renters"],
-    empty: "Renters show up here once they create an account.",
+    title: "browse.renters.title",
+    description: "browse.renters.description",
+    placeholder: "browse.renters.placeholder",
+    count: "browse.renters.count",
+    countMatching: "browse.renters.countMatching",
+    noneMatching: "browse.renters.noneMatching",
+    none: "browse.renters.none",
+    empty: "browse.renters.empty",
+    notListed: "browse.renters.notListed",
   },
-};
+} as const;
 
+/**
+ * /landlords or /renters: everyone in that role, with or without an account.
+ * `query` must already be free of kennitalas (the page redirects those).
+ */
 export async function PersonDirectory({
   role,
   query,
@@ -34,32 +49,25 @@ export async function PersonDirectory({
   page: number;
 }) {
   const copy = COPY[role];
-  const result = await listPeople({ role, query, sort, page });
+  const [t, result] = await Promise.all([getT(), listPeople({ role, query, sort, page })]);
   const basePath = `/${role}s`;
   const params = { q: query || undefined, sort: sort === "top" ? undefined : sort };
   redirectIfPastLastPage({ page, pageCount: result.pageCount, total: result.total, basePath, params });
 
   return (
     <DirectoryLayout
-      header={<PageHeader title={copy.title} description={copy.description} />}
-      filters={
-        <DirectoryFilters
-          basePath={basePath}
-          query={query}
-          sort={sort}
-          placeholder={`Search ${copy.noun[1]} by name or city`}
-        />
-      }
+      header={<PageHeader title={t(copy.title)} description={t(copy.description)} />}
+      filters={<DirectoryFilters basePath={basePath} query={query} sort={sort} placeholder={t(copy.placeholder)} />}
       summary={
         query ? (
           <>
-            {plural(result.total, copy.noun[0], copy.noun[1])} matching “{query}” ·{" "}
+            {t(copy.countMatching, { count: result.total, query })} ·{" "}
             <Link href={basePath} className="font-medium text-brand hover:underline">
-              Clear search
+              {t("browse.filters.clear")}
             </Link>
           </>
         ) : (
-          plural(result.total, copy.noun[0], copy.noun[1])
+          t(copy.count, { count: result.total })
         )
       }
     >
@@ -72,27 +80,23 @@ export async function PersonDirectory({
               </li>
             ))}
           </CardGrid>
-          <Pagination
-            page={page}
-            pageCount={result.pageCount}
-            basePath={basePath}
-            params={params}
-          />
+          <Pagination page={page} pageCount={result.pageCount} basePath={basePath} params={params} />
         </>
       ) : (
         <EmptyState
-          title={query ? `No ${copy.noun[1]} match “${query}”` : `No ${copy.noun[1]} yet`}
+          title={query ? t(copy.noneMatching, { query }) : t(copy.none)}
           action={
-            role === "landlord" ? (
-              <ButtonLink href="/properties/new" variant="secondary">
-                Review the place you rented instead
-              </ButtonLink>
-            ) : undefined
+            <div className="flex flex-wrap justify-center gap-2">
+              <ButtonLink href={`/reviews/new?kind=${role}`}>{t("browse.writeReview")}</ButtonLink>
+              {role === "landlord" && (
+                <ButtonLink href="/properties/new" variant="secondary">
+                  {t("browse.reviewPropertyInstead")}
+                </ButtonLink>
+              )}
+            </div>
           }
         >
-          {query ? "Try a different name or city." : copy.empty}
-          {role === "landlord" &&
-            " If your landlord isn't on GossipRent, you can still add and review the property you rented."}
+          {query ? t("browse.tryAgain") : t(copy.empty)} {t(copy.notListed)}
         </EmptyState>
       )}
     </DirectoryLayout>

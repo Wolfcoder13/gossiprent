@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatDate, formatMonthYear, plural } from "@/lib/format";
-import { pageHref, profilePath, subjectPath } from "@/lib/paths";
+import { pageHref, profilePath, reportPath, subjectPath } from "@/lib/paths";
 
 const ID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
 
@@ -44,24 +43,6 @@ describe("profilePath", () => {
   });
 });
 
-describe("format helpers", () => {
-  it("formats dates in UTC", () => {
-    expect(formatDate(new Date("2026-03-04T12:00:00Z"))).toBe("Mar 4, 2026");
-    // Late on Dec 31 UTC is still Dec 31, whatever the machine's time zone.
-    expect(formatDate(new Date("2025-12-31T23:30:00Z"))).toBe("Dec 31, 2025");
-    expect(formatMonthYear(new Date("2026-03-04T12:00:00Z"))).toBe("March 2026");
-  });
-
-  it("pluralizes counts", () => {
-    expect(plural(0, "review")).toBe("0 reviews");
-    expect(plural(1, "review")).toBe("1 review");
-    expect(plural(2, "review")).toBe("2 reviews");
-    expect(plural(1, "property", "properties")).toBe("1 property");
-    expect(plural(3, "property", "properties")).toBe("3 properties");
-    expect(plural(12345, "match", "matches")).toBe("12,345 matches");
-  });
-});
-
 describe("pageHref", () => {
   it("leaves out page 1 and empty params", () => {
     expect(pageHref("/landlords", 1)).toBe("/landlords");
@@ -70,14 +51,14 @@ describe("pageHref", () => {
 
   it("adds the page number after the other params", () => {
     expect(pageHref("/landlords", 2)).toBe("/landlords?page=2");
-    expect(pageHref("/landlords", 3, { q: "austin", sort: "name" })).toBe("/landlords?q=austin&sort=name&page=3");
-    expect(pageHref("/renters", 1, { q: "chicago", sort: undefined })).toBe("/renters?q=chicago");
+    expect(pageHref("/landlords", 3, { q: "akureyri", sort: "name" })).toBe("/landlords?q=akureyri&sort=name&page=3");
+    expect(pageHref("/renters", 1, { q: "selfoss", sort: undefined })).toBe("/renters?q=selfoss");
   });
 
   it("encodes the query", () => {
-    expect(pageHref("/properties", 2, { q: "Austin, TX" })).toBe("/properties?q=Austin%2C+TX&page=2");
+    expect(pageHref("/properties", 2, { q: "Njálsgata 23, 101" })).toBe("/properties?q=Nj%C3%A1lsgata+23%2C+101&page=2");
     expect(pageHref("/properties", 1, { q: "a&b=c#d" })).toBe("/properties?q=a%26b%3Dc%23d");
-    expect(pageHref("/properties", 1, { q: "café" })).toBe("/properties?q=caf%C3%A9");
+    expect(pageHref("/properties", 1, { q: "Kópavogur" })).toBe("/properties?q=K%C3%B3pavogur");
   });
 
   it("appends the hash last", () => {
@@ -98,5 +79,17 @@ describe("pageHref", () => {
     expect(url.searchParams.get("q")).toBe("  spaced  out ");
     expect(url.searchParams.get("sort")).toBe("newest");
     expect(url.searchParams.get("page")).toBe("7");
+  });
+});
+
+describe("reportPath", () => {
+  it("links to the report form for a review, profile or property", () => {
+    expect(reportPath("review", ID)).toBe(`/report?target=review&id=${ID}`);
+    expect(reportPath("profile", ID)).toBe(`/report?target=profile&id=${ID}`);
+    expect(reportPath("property", ID)).toBe(`/report?target=property&id=${ID}`);
+  });
+
+  it("has no id when someone reports their account was taken", () => {
+    expect(reportPath("account")).toBe("/report?target=account");
   });
 });

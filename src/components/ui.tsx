@@ -1,6 +1,9 @@
 import Link from "next/link";
 import type { ComponentProps, ReactNode } from "react";
-import type { UserRole } from "@/db/schema";
+
+// A client component (its label is translated with useT); re-exported so
+// server and client components can keep importing it from here.
+export { NoAccountBadge, RoleBadge } from "./role-badge";
 
 /** Tiny className joiner. */
 export function cx(...classes: (string | false | null | undefined)[]): string {
@@ -34,31 +37,6 @@ export function Card({ children, as: Tag = "div" }: { children: ReactNode; as?: 
   );
 }
 
-const ROLE_STYLES: Record<UserRole | "property", string> = {
-  landlord: "bg-amber-100 text-amber-900 dark:bg-amber-400/15 dark:text-amber-200",
-  renter: "bg-emerald-100 text-emerald-900 dark:bg-emerald-400/15 dark:text-emerald-200",
-  property: "bg-sky-100 text-sky-900 dark:bg-sky-400/15 dark:text-sky-200",
-};
-
-const ROLE_LABELS: Record<UserRole | "property", string> = {
-  landlord: "Landlord",
-  renter: "Renter",
-  property: "Property",
-};
-
-export function RoleBadge({ role }: { role: UserRole | "property" }) {
-  return (
-    <span
-      className={cx(
-        "inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold",
-        ROLE_STYLES[role],
-      )}
-    >
-      {ROLE_LABELS[role]}
-    </span>
-  );
-}
-
 const AVATAR_COLORS = [
   "bg-rose-200 text-rose-900",
   "bg-amber-200 text-amber-900",
@@ -68,6 +46,9 @@ const AVATAR_COLORS = [
   "bg-indigo-200 text-indigo-900",
   "bg-fuchsia-200 text-fuchsia-900",
 ];
+
+// Company-form suffixes don't count as a name part ("Hamar ehf." → "H", not "HE").
+const COMPANY_FORM = /^(?:ehf|hf|ohf|hses|sf|slf)\.?$/i;
 
 export function Avatar({
   name,
@@ -81,9 +62,9 @@ export function Avatar({
   const initials =
     name
       .split(/\s+/)
-      .filter(Boolean)
+      .filter((part) => part && !COMPANY_FORM.test(part))
       .slice(0, 2)
-      .map((part) => part[0]!.toUpperCase())
+      .map((part) => Array.from(part)[0]!.toLocaleUpperCase("is"))
       .join("") || "?";
   let hash = 0;
   for (const char of id) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;

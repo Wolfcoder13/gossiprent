@@ -5,7 +5,7 @@ import { getDb } from "@/db";
 import { authAttempts } from "@/db/schema";
 
 export type RateLimit = {
-  /** e.g. "login:email:jo@example.com" or "signup:ip:203.0.113.7" */
+  /** e.g. "login:account:jo@example.com" or "kt:user15:<uuid>". Never contains a kennitala. */
   key: string;
   /** Attempts allowed within the window. */
   max: number;
@@ -13,7 +13,9 @@ export type RateLimit = {
 };
 
 const MINUTE = 60 * 1000;
-const PRUNE_AFTER_MS = 24 * 60 * MINUTE;
+const DAY = 24 * 60 * MINUTE;
+// The longest window below; older attempts no longer count against anything.
+const PRUNE_AFTER_MS = DAY;
 
 // Escape hatch for automated test runs that create many accounts from one IP.
 const disabled = () => process.env.AUTH_RATE_LIMIT === "off";
@@ -28,7 +30,52 @@ export const RATE_LIMITS = {
   loginPerIp: { max: 50, windowMs: 15 * MINUTE },
   signupPerIp: { max: 20, windowMs: 60 * MINUTE },
   passwordChangePerUser: { max: 10, windowMs: 15 * MINUTE },
+  // Looking a kennitala up (wizard, property form, lookup, profile-page review)
+  // reveals whether someone with that number has been reviewed, so it's limited
+  // per account in a short and a long window, and per network.
+  kennitalaChecksPerUser: { max: 10, windowMs: 15 * MINUTE },
+  kennitalaChecksPerUserDaily: { max: 50, windowMs: DAY },
+  kennitalaChecksPerIp: { max: 100, windowMs: DAY },
+  // Wrong kennitalas typed on one profile's page, from anyone: guessing its number.
+  kennitalaMismatchPerSubject: { max: 20, windowMs: DAY },
+  newReviewsPerAuthor: { max: 20, windowMs: DAY },
+  // Profiles without an account, created by reviewing or linking a new kennitala.
+  newProfilesPerAuthor: { max: 5, windowMs: DAY },
+  reportsPerUser: { max: 10, windowMs: DAY },
+  reportsPerIp: { max: 20, windowMs: DAY },
 } as const;
+
+/** Limits for one kennitala check by a signed-in user (`ip` from clientIp(); null = unknown). */
+export function kennitalaCheckLimits(userId: string, ip: string | null): RateLimit[] {
+  return [
+    { key: `kt:user15:${userId}`, ...RATE_LIMITS.kennitalaChecksPerUser },
+    { key: `kt:userday:${userId}`, ...RATE_LIMITS.kennitalaChecksPerUserDaily },
+    ...(ip ? [{ key: `kt:ip:${ip}`, ...RATE_LIMITS.kennitalaChecksPerIp }] : []),
+  ];
+}
+
+/** Limit for a kennitala that didn't match profile `subjectId` (consumed on a mismatch only). */
+export function kennitalaMismatchLimits(subjectId: string): RateLimit[] {
+  return [{ key: `kt:subject:${subjectId}`, ...RATE_LIMITS.kennitalaMismatchPerSubject }];
+}
+
+/** Limit for writing a new review (not for editing one). */
+export function newReviewLimits(userId: string): RateLimit[] {
+  return [{ key: `review-new:user:${userId}`, ...RATE_LIMITS.newReviewsPerAuthor }];
+}
+
+/** Limit for creating a profile without an account (a review or property link to a new kennitala). */
+export function newProfileLimits(userId: string): RateLimit[] {
+  return [{ key: `profile-new:user:${userId}`, ...RATE_LIMITS.newProfilesPerAuthor }];
+}
+
+/** Limits for sending a report, signed in (`userId`) or not (null). */
+export function reportLimits(userId: string | null, ip: string | null): RateLimit[] {
+  return [
+    ...(userId ? [{ key: `report:user:${userId}`, ...RATE_LIMITS.reportsPerUser }] : []),
+    ...(ip ? [{ key: `report:ip:${ip}`, ...RATE_LIMITS.reportsPerIp }] : []),
+  ];
+}
 
 /**
  * The visitor's IP address, or null if unknown. Vercel sets these headers

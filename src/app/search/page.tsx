@@ -2,22 +2,50 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { CardGrid, PersonCard, PropertyCard } from "@/components/cards";
+import { KennitalaLookup } from "@/components/kennitala-lookup";
+import { redirectKennitalaQuery } from "@/components/kennitala-query";
+import { SearchBox } from "@/components/search-box";
 import { EmptyState, PageHeader } from "@/components/ui";
+import { getFormat, getT } from "@/i18n/server";
+import { getCurrentUser } from "@/lib/auth/current-user";
 import { listPeople, listProperties, parseQuery } from "@/lib/data";
-import { plural } from "@/lib/format";
 
-export const metadata: Metadata = { title: "Search" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getT();
+  return { title: t("meta.pages.search"), robots: { index: false, follow: true } };
+}
 
 const RESULTS_PER_GROUP = 6;
 
+/**
+ * Search everything, with the kennitala lookup under the search box. A query
+ * containing a kennitala is never searched or echoed: it lands on
+ * /search?kt=1, which points to the lookup form instead.
+ */
 export default async function SearchPage({ searchParams }: PageProps<"/search">) {
-  const query = parseQuery((await searchParams).q);
+  const search = await searchParams;
+  redirectKennitalaQuery(search.q);
+  const query = parseQuery(search.q);
+  const fromKennitala = search.kt === "1";
+  const [t, user] = await Promise.all([getT(), getCurrentUser()]);
+
+  const lookup = (
+    <div className="mt-6 max-w-xl space-y-3">
+      {fromKennitala && (
+        <p className="rounded-xl border border-line bg-surface-muted px-4 py-3 text-sm text-ink">
+          {t("lookup.useFormBelow")}
+        </p>
+      )}
+      <KennitalaLookup loggedIn={user !== null} />
+    </div>
+  );
 
   if (!query) {
     return (
       <div className="mx-auto max-w-6xl px-4 py-10 sm:px-6">
-        <PageHeader title="Search" description="Find landlords, renters, and properties by name, city, or address." />
+        <PageHeader title={t("browse.results.title")} description={t("browse.results.description")} />
         <SearchForm query="" />
+        {lookup}
       </div>
     );
   }
@@ -32,36 +60,57 @@ export default async function SearchPage({ searchParams }: PageProps<"/search">)
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-10 sm:px-6">
-      <PageHeader title={<>Results for “{query}”</>} description={plural(total, "match", "matches")} />
+      <PageHeader
+        title={t("browse.results.heading", { query })}
+        description={t("browse.results.count", { count: total })}
+      />
       <SearchForm query={query} />
+      {lookup}
 
       {total === 0 ? (
         <div className="mt-8">
-          <EmptyState title="Nothing matched your search">
-            Try a shorter name, just the city, or the street name. Can&apos;t find the place you rent?{" "}
-            <Link href="/properties/new" className="font-semibold text-brand hover:underline">
-              Add it
-            </Link>
-            .
+          <EmptyState title={t("browse.results.noneTitle")}>
+            {t.rich("browse.results.noneBody", {
+              add: (
+                <Link href="/properties/new" className="font-semibold text-brand hover:underline">
+                  {t("browse.results.addIt")}
+                </Link>
+              ),
+            })}
           </EmptyState>
         </div>
       ) : (
         <div className="mt-8 space-y-12">
-          <ResultGroup title="Landlords" total={landlords.total} moreHref={`/landlords?${q}`}>
+          <ResultGroup
+            title={t("browse.results.landlords")}
+            total={landlords.total}
+            moreHref={`/landlords?${q}`}
+            moreLabel={t("browse.results.seeAll.landlords", { count: landlords.total })}
+          >
             {landlords.items.map((p) => (
               <li key={p.id}>
                 <PersonCard person={p} role="landlord" />
               </li>
             ))}
           </ResultGroup>
-          <ResultGroup title="Properties" total={properties.total} moreHref={`/properties?${q}`}>
+          <ResultGroup
+            title={t("browse.results.properties")}
+            total={properties.total}
+            moreHref={`/properties?${q}`}
+            moreLabel={t("browse.results.seeAll.properties", { count: properties.total })}
+          >
             {properties.items.map((p) => (
               <li key={p.id}>
                 <PropertyCard property={p} />
               </li>
             ))}
           </ResultGroup>
-          <ResultGroup title="Renters" total={renters.total} moreHref={`/renters?${q}`}>
+          <ResultGroup
+            title={t("browse.results.renters")}
+            total={renters.total}
+            moreHref={`/renters?${q}`}
+            moreLabel={t("browse.results.seeAll.renters", { count: renters.total })}
+          >
             {renters.items.map((p) => (
               <li key={p.id}>
                 <PersonCard person={p} role="renter" />
@@ -74,48 +123,45 @@ export default async function SearchPage({ searchParams }: PageProps<"/search">)
   );
 }
 
-function SearchForm({ query }: { query: string }) {
+async function SearchForm({ query }: { query: string }) {
+  const t = await getT();
   return (
-    <form action="/search" role="search" className="mt-6 flex max-w-xl gap-2">
-      <label htmlFor="search-q" className="sr-only">
-        Search
-      </label>
-      <input
-        id="search-q"
-        name="q"
-        type="search"
-        defaultValue={query}
-        placeholder="Search a name, city, or address"
-        className="min-w-0 flex-1 rounded-full border border-line-input bg-surface px-5 py-2.5 text-ink placeholder:text-muted focus:border-brand focus:outline-none focus:ring-2 focus:ring-focus/40"
-      />
-      <button type="submit" className="rounded-full bg-brand px-5 py-2.5 font-semibold text-brand-ink hover:bg-brand-hover">
-        Search
-      </button>
-    </form>
+    <SearchBox
+      action="/search"
+      inputId="search-q"
+      label={t("browse.results.label")}
+      placeholder={t("browse.results.placeholder")}
+      buttonLabel={t("browse.results.button")}
+      defaultValue={query}
+      variant="page"
+    />
   );
 }
 
-function ResultGroup({
+async function ResultGroup({
   title,
   total,
   moreHref,
+  moreLabel,
   children,
 }: {
   title: string;
   total: number;
   moreHref: string;
+  moreLabel: string;
   children: ReactNode;
 }) {
   if (total === 0) return null;
+  const format = await getFormat();
   return (
     <section aria-label={title}>
       <div className="mb-4 flex items-end justify-between gap-4">
         <h2 className="text-xl font-bold text-ink">
-          {title} <span className="font-normal text-muted">({total})</span>
+          {title} <span className="font-normal text-muted">({format.number(total)})</span>
         </h2>
         {total > RESULTS_PER_GROUP && (
           <Link href={moreHref} className="text-sm font-semibold text-brand hover:underline">
-            See all {total} →
+            {moreLabel}
           </Link>
         )}
       </div>

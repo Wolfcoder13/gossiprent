@@ -1,10 +1,18 @@
 "use client";
 
 import { useEffect, useId, useRef, useState } from "react";
+import { useT } from "@/i18n/client";
 import { STAR_PATH } from "./stars";
 import { cx } from "./ui";
 
-const LABELS = ["", "Terrible", "Poor", "Okay", "Good", "Excellent"];
+/** What each number of stars means, from 1 to 5. */
+const LABELS = [
+  "common.starInput.terrible",
+  "common.starInput.poor",
+  "common.starInput.okay",
+  "common.starInput.good",
+  "common.starInput.excellent",
+] as const;
 
 /**
  * Accessible 1–5 star picker built on native radio buttons, so it works with
@@ -17,6 +25,7 @@ export function StarInput({
   defaultValue?: number;
   error?: string[];
 }) {
+  const t = useT();
   const initial = defaultValue && defaultValue >= 1 && defaultValue <= 5 ? defaultValue : 0;
   const [value, setValue] = useState(initial);
   const [hover, setHover] = useState(0);
@@ -39,7 +48,7 @@ export function StarInput({
       aria-describedby={error?.length ? errorId : undefined}
       aria-invalid={error?.length ? true : undefined}
     >
-      <legend className="text-sm font-medium text-ink">Your rating</legend>
+      <legend className="text-sm font-medium text-ink">{t("common.starInput.legend")}</legend>
       <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
         <div className="flex" onMouseLeave={() => setHover(0)}>
           {[1, 2, 3, 4, 5].map((n) => (
@@ -68,13 +77,13 @@ export function StarInput({
                 <path d={STAR_PATH} />
               </svg>
               <span className="sr-only">
-                {n} {n === 1 ? "star" : "stars"} ({LABELS[n]})
+                {t("common.starInput.option", { count: n, label: t(LABELS[n - 1]) })}
               </span>
             </label>
           ))}
         </div>
         <span className="text-sm font-medium text-muted" aria-hidden>
-          {shown ? LABELS[shown] : "Tap a star"}
+          {shown ? t(LABELS[shown - 1]) : t("common.starInput.hint")}
         </span>
       </div>
       {error?.length ? (

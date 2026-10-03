@@ -1,50 +1,149 @@
+/**
+ * Form schemas. Error messages are dictionary keys (validation.*), which
+ * parseForm translates for the visitor; length messages get the limit that
+ * failed as {count}.
+ */
+
 import { z } from "zod";
+import type { ReportReason, ReportTarget, ReviewKind } from "@/db/schema";
+import type { Messages } from "@/i18n/messages";
+import type { Leaves, Translator } from "@/i18n/types";
+import { LIMITS, type FormState } from "./form-state";
+import { containsKennitala, parseKennitalaInput } from "./kennitala";
+import { isHomePostcode } from "./postcodes";
+import { normalizeText } from "./text";
 
-/** Trimmed text where blank means "not provided" (stored as null). */
-const optionalText = (max: number, label: string) =>
-  z
+type ValidationKey = `validation.${Leaves<Messages["validation"]>}`;
+
+const noKennitala = (value: string) => !containsKennitala(value);
+
+/**
+ * Multi-line free text (reviews, bios, descriptions): NFC, trimmed, at most
+ * `max` characters, and never containing a kennitala.
+ */
+export function freeText(max: number, tooLong: ValidationKey = "validation.tooLong") {
+  return z
     .string()
+    .normalize("NFC")
     .trim()
-    .max(max, `${label} must be ${max} characters or fewer.`)
-    .optional()
-    .transform((value) => value || null);
+    .max(max, tooLong)
+    .refine(noKennitala, "validation.noKennitalaInText");
+}
 
-const email = z
-  .string()
-  .trim()
-  .toLowerCase()
-  .max(254, "Email is too long.")
-  .pipe(z.email("Enter a valid email address."));
+/** One line of text: like freeText, with runs of whitespace collapsed to one space. */
+function textLine(max: number, tooLong: ValidationKey) {
+  return z
+    .string()
+    .overwrite(normalizeText)
+    .max(max, tooLong)
+    .refine(noKennitala, "validation.noKennitalaInText");
+}
+
+/** Blank (empty or only spaces) or missing means "not given": null. */
+export function optional<T extends z.ZodType>(schema: T) {
+  return z.preprocess(
+    (value) => (value === undefined || (typeof value === "string" && value.trim() === "") ? null : value),
+    schema.nullable(),
+  );
+}
 
 /** A checkbox: present ("on") when ticked, missing when not. */
-const checkbox = z
+export const checkbox = z
   .string()
   .optional()
   .transform((value) => value === "on");
 
-const name = z
+export const emailField = z
   .string()
   .trim()
-  .min(2, "Name must be at least 2 characters.")
-  .max(80, "Name must be 80 characters or fewer.");
+  .toLowerCase()
+  .max(LIMITS.email.max, "validation.email.tooLong")
+  .pipe(z.email("validation.email.invalid"));
 
 const password = z
   .string()
-  .min(8, "Password must be at least 8 characters.")
-  .max(128, "Password must be 128 characters or fewer.");
+  .min(LIMITS.password.min, "validation.password.tooShort")
+  .max(LIMITS.password.max, "validation.password.tooLong");
+
+/**
+ * A kennitala however it was typed ("010130-2989", "010130 2989", "kt. 0101302989")
+ * → its 10 digits. Rejects anything that can't be a real one (see parseKennitalaInput).
+ */
+export const kennitalaField = z
+  .string({ error: "validation.kennitala.required" })
+  .trim()
+  .min(1, "validation.kennitala.required")
+  .transform((value, ctx) => {
+    const parsed = parseKennitalaInput(value);
+    if (parsed) return parsed.value;
+    ctx.issues.push({ code: "custom", message: "validation.kennitala.invalid", input: value });
+    return z.NEVER;
+  });
+
+/** Like kennitalaField, but blank or missing → null. */
+export const optionalKennitalaField = optional(kennitalaField);
+
+// Names: letters in any script (with combining marks), spaces, hyphens,
+// apostrophes and periods, and at least one letter. Companies may also use
+// digits and "&". Empty passes here so a blank name only gets "too short".
+const PERSON_NAME = /^$|^(?=.*\p{L})[\p{L}\p{M} '’.-]+$/u;
+const COMPANY_NAME = /^$|^(?=.*\p{L})[\p{L}\p{M}0-9& '’.-]+$/u;
+const WEB_ADDRESS = /https?:|www\.|[\p{L}\p{N}]\.(?:is|com|net|org|io|eu|co|uk|de|dk|no|se|info|biz)(?![\p{L}\p{N}])/iu;
+
+function nameField(chars: RegExp, charsMessage: ValidationKey) {
+  return z
+    .string()
+    .overwrite(normalizeText)
+    .min(LIMITS.name.min, "validation.name.tooShort")
+    .max(LIMITS.name.max, "validation.name.tooLong")
+    .regex(chars, charsMessage)
+    .refine((value) => !WEB_ADDRESS.test(value), "validation.name.noLink")
+    .refine(noKennitala, "validation.noKennitalaInText");
+}
+
+/** A person's name (accounts are always persons). */
+export const personName = nameField(PERSON_NAME, "validation.name.personChars");
+
+/** The name typed for someone else, before we know if their kennitala is a person's or a company's. */
+export const personOrCompanyName = nameField(COMPANY_NAME, "validation.name.companyChars");
+
+/**
+ * Whether a name that passed personOrCompanyName also meets the rules for a
+ * person (no digits or "&"). For use once the kennitala shows it's a person.
+ */
+export function isPersonName(name: string): boolean {
+  return PERSON_NAME.test(normalizeText(name));
+}
+
+/** A postcode from the list (HOME_POSTCODES) → its number, e.g. "101" → 101. */
+export const postalCodeField = z
+  .string({ error: "validation.postalCode.required" })
+  .trim()
+  .min(1, "validation.postalCode.required")
+  .transform((value, ctx) => {
+    const code = Number(value);
+    if (/^\d{3}$/.test(value) && isHomePostcode(code)) return code;
+    ctx.issues.push({ code: "custom", message: "validation.postalCode.invalid", input: value });
+    return z.NEVER;
+  });
+
+const city = optional(textLine(LIMITS.city.max, "validation.city.tooLong"));
 
 export const signupSchema = z
   .object({
-    name,
-    email,
+    kennitala: kennitalaField,
+    name: personName,
+    email: emailField,
     password,
     isRenter: checkbox,
     isLandlord: checkbox,
-    city: optionalText(80, "City"),
+    city,
   })
   .refine((data) => data.isRenter || data.isLandlord, {
     path: ["roles"],
-    message: "Choose at least one: renter, landlord, or both.",
+    message: "validation.roles.required",
+    // Also when another field (e.g. the kennitala) failed, so every problem shows at once.
+    when: () => true,
   });
 
 export const roleChangeSchema = z.object({
@@ -53,90 +152,157 @@ export const roleChangeSchema = z.object({
 });
 
 export const loginSchema = z.object({
-  email,
-  password: z.string().min(1, "Enter your password.").max(128),
+  email: emailField,
+  password: z.string().min(1, "validation.password.required").max(LIMITS.password.max),
 });
 
 export const profileSchema = z.object({
-  name,
-  city: optionalText(80, "City"),
-  bio: optionalText(500, "Bio"),
+  name: personName,
+  city,
+  bio: optional(freeText(LIMITS.bio.max, "validation.bio.tooLong")),
 });
 
 export const passwordChangeSchema = z
   .object({
-    currentPassword: z.string().min(1, "Enter your current password.").max(128),
+    currentPassword: z.string().min(1, "validation.password.currentRequired").max(LIMITS.password.max),
     newPassword: password,
-    confirmPassword: z.string().max(128, "Password must be 128 characters or fewer."),
+    confirmPassword: z.string().max(LIMITS.password.max, "validation.password.tooLong"),
   })
   .refine((data) => data.newPassword === data.confirmPassword, {
     path: ["confirmPassword"],
-    message: "The new passwords don't match.",
+    message: "validation.password.mismatch",
   });
 
+const REVIEW_KINDS = ["landlord", "renter", "property"] as const satisfies readonly ReviewKind[];
+
+const rating = z.coerce
+  // Without this, a missing rating shows zod's "expected number, received NaN".
+  .number({ error: "validation.rating.required" })
+  .int("validation.rating.whole")
+  .min(1, "validation.rating.required")
+  .max(5, "validation.rating.required");
+
+const title = textLine(LIMITS.title.max, "validation.title.tooLong").min(LIMITS.title.min, "validation.title.tooShort");
+
+const body = freeText(LIMITS.body.max, "validation.body.tooLong").min(LIMITS.body.min, "validation.body.tooShort");
+
+/** The review form on a profile or property page. */
 export const reviewSchema = z.object({
-  kind: z.enum(["landlord", "renter", "property"]),
-  subjectId: z.uuid("That review target doesn't exist."),
-  rating: z.coerce
-    // Without this, a missing rating shows zod's "expected number, received NaN".
-    .number({ error: "Pick a star rating from 1 to 5." })
-    .int("Pick a star rating.")
-    .min(1, "Pick a star rating from 1 to 5.")
-    .max(5, "Pick a star rating from 1 to 5."),
-  title: z
-    .string()
-    .trim()
-    .min(3, "Title must be at least 3 characters.")
-    .max(120, "Title must be 120 characters or fewer."),
-  body: z
-    .string()
-    .trim()
-    .min(20, "Your review must be at least 20 characters.")
-    .max(5000, "Your review must be 5,000 characters or fewer."),
+  kind: z.enum(REVIEW_KINDS),
+  subjectId: z.uuid("validation.review.subject"),
+  // Only for a first review of a person: proves the reviewer knows who they are.
+  subjectKennitala: optionalKennitalaField,
+  rating,
+  title,
+  body,
 });
 
-export const propertySchema = z.object({
-  address: z
-    .string()
-    .trim()
-    .min(3, "Enter the street address.")
-    .max(200, "Address must be 200 characters or fewer."),
-  unit: optionalText(30, "Unit"),
-  city: z
-    .string()
-    .trim()
-    .min(2, "Enter the city.")
-    .max(80, "City must be 80 characters or fewer."),
-  region: z
-    .string()
-    .trim()
-    .min(2, "Enter the state, province, or region.")
-    .max(80, "State/region must be 80 characters or fewer."),
-  postalCode: optionalText(20, "Postal code"),
-  description: optionalText(300, "Description"),
-  // People who are both a landlord and a renter say which applies here.
-  relation: z.enum(["own", "rent"], { error: "Choose whether you own or rent this place." }).optional(),
-  // A renter's landlord, if they're on GossipRent ("" = not on GossipRent / not sure).
-  landlordId: z
-    .union([z.literal(""), z.uuid("Choose a landlord from the list.")])
-    .optional()
-    .transform((value) => value || null),
-});
+/**
+ * Forms with a "check" button next to a kennitala and a main "save" button:
+ * a submission without an intent saves.
+ */
+function savesByDefault<T extends z.ZodType>(schema: T) {
+  return z.preprocess(
+    (input) =>
+      typeof input === "object" && input !== null && (input as { intent?: unknown }).intent === undefined
+        ? { ...input, intent: "save" }
+        : input,
+    schema,
+  );
+}
 
-type FieldErrors = Partial<Record<string, string[]>>;
+const personKind = z.enum(["landlord", "renter"], { error: "validation.review.kind" });
 
-/** Shared shape returned by every form Server Action. */
-export type FormState = {
-  status: "idle" | "error" | "success";
-  message?: string;
-  fieldErrors?: FieldErrors;
-  /** Echo of the submitted values so the form can be re-filled after an error. */
-  values?: Record<string, string>;
-  /** Optional follow-up link shown with the message. */
-  link?: { href: string; label: string };
-};
+/**
+ * /reviews/new. intent "check" looks up the kennitala (only kind and
+ * subjectKennitala are needed); intent "save" posts the review. subjectName
+ * and confirmNew are only required when the kennitala is new to GossipRent,
+ * which only the action can tell.
+ */
+export const reviewWizardSchema = savesByDefault(
+  z.discriminatedUnion("intent", [
+    z.object({ intent: z.literal("check"), kind: personKind, subjectKennitala: kennitalaField }),
+    z.object({
+      intent: z.literal("save"),
+      kind: personKind,
+      subjectKennitala: kennitalaField,
+      subjectName: optional(personOrCompanyName),
+      confirmNew: checkbox,
+      rating,
+      title,
+      body,
+    }),
+  ]),
+);
 
-export const idleFormState: FormState = { status: "idle" };
+// "íbúð 0201", "íb. 3", "apt 2", "unit 5" and "#4" are stored as "0201", "3", "2", "5" and "4".
+const UNIT_PREFIX = /^(?:#|(?:íbúð|íb\.|apt\.?|unit)(?!\p{L}))\s*/iu;
+
+/**
+ * Add a property. intent "check" only reports who landlordKennitala belongs
+ * to; intent "save" adds the property. landlordName and confirmNewLandlord
+ * are only required when the kennitala is new, which only the action can tell.
+ */
+export const propertySchema = savesByDefault(
+  z.discriminatedUnion("intent", [
+    z.object({ intent: z.literal("check"), landlordKennitala: kennitalaField }),
+    z.object({
+      intent: z.literal("save"),
+      address: textLine(LIMITS.address.max, "validation.address.tooLong").min(
+        LIMITS.address.min,
+        "validation.address.required",
+      ),
+      unit: optional(
+        textLine(LIMITS.unit.max, "validation.unit.tooLong").overwrite((unit) => unit.replace(UNIT_PREFIX, "")),
+      ).transform((unit) => unit || null),
+      postalCode: postalCodeField,
+      description: optional(freeText(LIMITS.description.max, "validation.description.tooLong")),
+      // People who are both a landlord and a renter say which applies here.
+      relation: z.enum(["own", "rent"], { error: "validation.relation.required" }).optional(),
+      landlordKennitala: optionalKennitalaField,
+      landlordName: optional(personOrCompanyName),
+      confirmNewLandlord: checkbox,
+    }),
+  ]),
+);
+
+/** Look up a kennitala (home page and /search). */
+export const lookupSchema = z.object({ kennitala: kennitalaField });
+
+export const REPORT_TARGETS = ["review", "profile", "property", "account"] as const satisfies readonly ReportTarget[];
+
+export const REPORT_REASONS = [
+  "wrong_person",
+  "wrong_name",
+  "false_or_abusive",
+  "personal_data",
+  "identity_claimed",
+  "other",
+] as const satisfies readonly ReportReason[];
+
+/**
+ * /report. `id` is required except for target "account" (always null there).
+ * The details may contain a kennitala: someone reporting that their identity
+ * was claimed has to say whose. Reports are only read by the operator.
+ */
+export const reportSchema = z
+  .object({
+    target: z.enum(REPORT_TARGETS, { error: "validation.report.target" }),
+    id: optional(z.uuid("validation.report.target")),
+    reason: z.enum(REPORT_REASONS, { error: "validation.report.reason" }),
+    details: z
+      .string()
+      .normalize("NFC")
+      .trim()
+      .min(1, "validation.report.detailsRequired")
+      .max(LIMITS.reportDetails.max, "validation.tooLong"),
+    contactEmail: optional(emailField),
+  })
+  .refine((report) => report.target === "account" || report.id !== null, {
+    path: ["id"],
+    message: "validation.report.target",
+  })
+  .transform((report) => (report.target === "account" ? { ...report, id: null } : report));
 
 /**
  * Postgres can't store or compare text containing NUL characters (it errors),
@@ -157,10 +323,24 @@ export function formValues(formData: FormData): Record<string, string> {
   return values;
 }
 
-/** Parse a FormData against a schema, returning field errors on failure. */
+/** `t` for a key that's only known at runtime (one that `t.has` accepted). */
+type DynamicT = (key: string, params?: Record<string, number>) => string;
+
+/** A zod issue in the visitor's language. Unknown messages become validation.invalid. */
+function issueMessage(issue: z.core.$ZodIssue, t: Translator<Messages>): string {
+  const limit = issue.code === "too_small" ? issue.minimum : issue.code === "too_big" ? issue.maximum : undefined;
+  const key = t.has(issue.message) ? issue.message : "validation.invalid";
+  return (t as unknown as DynamicT)(key, limit === undefined ? undefined : { count: Number(limit) });
+}
+
+/**
+ * Parse a FormData against a schema. On failure, returns an error state with
+ * translated field errors (issues without a field become the banner).
+ */
 export function parseForm<T extends z.ZodType>(
   schema: T,
   formData: FormData,
+  t: Translator<Messages>,
 ):
   | { success: true; data: z.output<T> }
   | { success: false; state: FormState } {
@@ -170,12 +350,21 @@ export function parseForm<T extends z.ZodType>(
   }
   const result = schema.safeParse(input);
   if (result.success) return { success: true, data: result.data };
+
+  const fieldErrors: Partial<Record<string, string[]>> = {};
+  let formError: string | undefined;
+  for (const issue of result.error.issues) {
+    const message = issueMessage(issue, t);
+    const field = issue.path[0];
+    if (field === undefined) formError ??= message;
+    else (fieldErrors[String(field)] ??= []).push(message);
+  }
   return {
     success: false,
     state: {
       status: "error",
-      message: "Please fix the highlighted fields.",
-      fieldErrors: z.flattenError(result.error).fieldErrors as FieldErrors,
+      message: formError ?? t("validation.fixHighlighted"),
+      fieldErrors,
       values: formValues(formData),
     },
   };

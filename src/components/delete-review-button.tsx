@@ -1,14 +1,16 @@
 "use client";
 
 import { deleteReview } from "@/app/actions/reviews";
+import { useT } from "@/i18n/client";
 import { SubmitButton } from "./form";
 
 export function DeleteReviewButton({ reviewId }: { reviewId: string }) {
+  const t = useT();
   return (
     <form
       action={deleteReview}
       onSubmit={(event) => {
-        if (!window.confirm("Delete this review? This can't be undone.")) {
+        if (!window.confirm(t("common.deleteReview.confirm"))) {
           event.preventDefault();
           return;
         }
@@ -23,8 +25,12 @@ export function DeleteReviewButton({ reviewId }: { reviewId: string }) {
       }}
     >
       <input type="hidden" name="reviewId" value={reviewId} />
-      <SubmitButton variant="danger" pendingLabel="Deleting…" className="px-3! py-1! text-xs">
-        Delete
+      <SubmitButton
+        variant="danger"
+        pendingLabel={t("common.deleteReview.pending")}
+        className="px-3! py-1! text-xs"
+      >
+        {t("common.deleteReview.button")}
       </SubmitButton>
     </form>
   );

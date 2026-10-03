@@ -5,23 +5,26 @@ import { changeRole } from "@/app/actions/account";
 import { FormMessage, SubmitButton, useFocusAfterSubmit } from "@/components/form";
 import { RoleBadge } from "@/components/ui";
 import type { UserRole } from "@/db/schema";
-import { idleFormState } from "@/lib/validation";
+import { useT } from "@/i18n/client";
+import { idleFormState } from "@/lib/form-state";
 
-const ROLE_COPY: Record<UserRole, { add: string; remove: string; confirmRemove: string; kept: string }> = {
+// Message keys per role (whole sentences, never built from the role's name).
+const ROLE_COPY = {
   landlord: {
-    add: "I'm also a landlord",
-    remove: "Remove landlord role",
-    confirmRemove:
-      "Remove the landlord role? Your properties will no longer be linked to you. You can add the role back any time.",
-    kept: "Renters have reviewed you, so this role stays.",
+    add: "account.roles.add.landlord",
+    remove: "account.roles.remove.landlord",
+    confirmRemove: "account.roles.confirmRemove.landlord",
+    kept: "account.roles.kept.landlord",
+    notA: "account.roles.notA.landlord",
   },
   renter: {
-    add: "I'm also a renter",
-    remove: "Remove renter role",
-    confirmRemove: "Remove the renter role? You can add it back any time.",
-    kept: "Landlords have reviewed you, so this role stays.",
+    add: "account.roles.add.renter",
+    remove: "account.roles.remove.renter",
+    confirmRemove: "account.roles.confirmRemove.renter",
+    kept: "account.roles.kept.renter",
+    notA: "account.roles.notA.renter",
   },
-};
+} as const satisfies Record<UserRole, Record<string, string>>;
 
 /**
  * The account's roles, with a button to add a missing one and, for someone
@@ -40,6 +43,7 @@ export function RolesForm({
   /** Page to offer going back to after adding a role (e.g. the review they were writing). */
   next?: string;
 }) {
+  const t = useT();
   const [state, formAction] = useActionState(changeRole, idleFormState);
   const ref = useRef<HTMLDivElement>(null);
   useFocusAfterSubmit(ref, state);
@@ -58,30 +62,38 @@ export function RolesForm({
             {has[role] ? (
               <RoleBadge role={role} />
             ) : (
-              <span className="text-sm text-muted">Not a {role}</span>
+              <span className="text-sm text-muted">{t(ROLE_COPY[role].notA)}</span>
             )}
             {!has[role] ? (
               <form action={formAction}>
                 <input type="hidden" name="role" value={role} />
                 <input type="hidden" name="change" value="add" />
                 {next && <input type="hidden" name="next" value={next} />}
-                <SubmitButton variant="secondary" pendingLabel="Saving…" className="px-3! py-1.5! text-xs">
-                  {ROLE_COPY[role].add}
+                <SubmitButton
+                  variant="secondary"
+                  pendingLabel={t("account.roles.saving")}
+                  className="px-3! py-1.5! text-xs"
+                >
+                  {t(ROLE_COPY[role].add)}
                 </SubmitButton>
               </form>
             ) : both && reviewedAs.includes(role) ? (
-              <span className="text-xs text-muted">{ROLE_COPY[role].kept}</span>
+              <span className="text-xs text-muted">{t(ROLE_COPY[role].kept)}</span>
             ) : both ? (
               <form
                 action={formAction}
                 onSubmit={(event) => {
-                  if (!window.confirm(ROLE_COPY[role].confirmRemove)) event.preventDefault();
+                  if (!window.confirm(t(ROLE_COPY[role].confirmRemove))) event.preventDefault();
                 }}
               >
                 <input type="hidden" name="role" value={role} />
                 <input type="hidden" name="change" value="remove" />
-                <SubmitButton variant="secondary" pendingLabel="Saving…" className="px-3! py-1.5! text-xs">
-                  {ROLE_COPY[role].remove}
+                <SubmitButton
+                  variant="secondary"
+                  pendingLabel={t("account.roles.saving")}
+                  className="px-3! py-1.5! text-xs"
+                >
+                  {t(ROLE_COPY[role].remove)}
                 </SubmitButton>
               </form>
             ) : null}

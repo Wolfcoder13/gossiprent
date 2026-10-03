@@ -5,24 +5,29 @@ import {
   count,
   desc,
   eq,
-  ilike,
+  inArray,
   isNull,
+  like,
   ne,
   or,
   sql,
+  type AnyColumn,
   type SQL,
 } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { cache } from "react";
 import { getDb } from "@/db";
+import { properties, reviews, users, type UserRole } from "@/db/schema";
+import { KENNITALA_SHAPED } from "@/lib/kennitala";
+import { placeName, postcodesMatching } from "@/lib/postcodes";
 import { reviewerRole } from "@/lib/roles";
-import {
-  properties,
-  reviews,
-  users,
-  type ReviewKind,
-  type UserRole,
-} from "@/db/schema";
+import { foldForSearch, propertyAddressKeys, SEARCH_FOLDS } from "@/lib/text";
+
+/*
+ * Read queries for the public pages and the dashboard. Locale-free: the pages
+ * turn these values into words. Nothing here selects an email, a kennitala or
+ * a password hash.
+ */
 
 export const PAGE_SIZE = 12;
 export const REVIEWS_PAGE_SIZE = 10;
@@ -31,17 +36,25 @@ export const REVIEWS_PAGE_SIZE = 10;
 // Shared types
 // ---------------------------------------------------------------------------
 
-/** Everything about a user that's safe to show publicly (never the email). */
-type PublicUser = {
+/** Everything about a person that's safe to show publicly. */
+export type PublicUser = {
   id: string;
   name: string;
   isLandlord: boolean;
   isRenter: boolean;
+  isCompany: boolean;
+  /**
+   * False for a profile created when someone reviewed this kennitala or named it
+   * as a property's landlord, and not (yet) taken over by its owner.
+   */
+  hasAccount: boolean;
+  /** Only accounts have a city and bio. */
   city: string | null;
   bio: string | null;
-  createdAt: Date;
-  /** Set when the person closed their account (their profile and the reviews about them remain). */
-  deletedAt: Date | null;
+  /** When the account was created ("Member since"); null without an account. */
+  joinedAt: Date | null;
+  /** When the earliest review about them was written ("First reviewed"); null if none. */
+  firstReviewedAt: Date | null;
 };
 
 export type RatingSummary = {
@@ -59,21 +72,35 @@ export type PersonListItem = PublicUser & {
 
 export type PropertyListItem = {
   id: string;
+  /** "Njálsgata 23" */
   address: string;
+  /** The apartment as typed ("0201", "2. hæð t.v."), without "íbúð"; null if none. */
   unit: string | null;
-  city: string;
-  region: string;
-  postalCode: string | null;
+  postalCode: number;
+  /** The postcode's place name ("Reykjavík"). */
+  place: string;
   description: string | null;
-  landlord: { id: string; name: string } | null;
+  /** hasAccount false: a renter named this landlord and they haven't confirmed it. */
+  landlord: { id: string; name: string; hasAccount: boolean } | null;
+  /** Who added the property; null if their account is gone. */
+  createdById: string | null;
   createdAt: Date;
   average: number | null;
   reviewCount: number;
 };
 
-type PropertyDetail = Omit<PropertyListItem, "average" | "reviewCount">;
+export type PropertyDetail = Omit<PropertyListItem, "average" | "reviewCount">;
 
-type ReviewSubject = { kind: ReviewKind; id: string; name: string };
+export type ReviewSubject =
+  | { kind: "landlord" | "renter"; id: string; name: string }
+  | {
+      kind: "property";
+      id: string;
+      address: string;
+      unit: string | null;
+      postalCode: number;
+      place: string;
+    };
 
 export type ReviewItem = {
   id: string;
@@ -87,7 +114,7 @@ export type ReviewItem = {
   subject: ReviewSubject;
 };
 
-type Paginated<T> = {
+export type Paginated<T> = {
   items: T[];
   total: number;
   page: number;
@@ -98,7 +125,7 @@ type Paginated<T> = {
  * Who/what a set of reviews is about. For a person, `as` says which role:
  * someone who's both a landlord and a renter has separate ratings for each.
  */
-type ReviewTarget = { userId: string; as: UserRole } | { propertyId: string };
+export type ReviewTarget = { userId: string; as: UserRole } | { propertyId: string };
 
 const roleColumn = (role: UserRole) => (role === "landlord" ? users.isLandlord : users.isRenter);
 
@@ -116,7 +143,7 @@ export function isUuid(value: string): boolean {
   return UUID_RE.test(value);
 }
 
-/** `%query%` for ILIKE, with the user's own `%`, `_` and `\` matched literally. */
+/** `%query%` for LIKE, with the user's own `%`, `_` and `\` matched literally. */
 export function likePattern(query: string): string {
   return `%${query.replace(/[\\%_]/g, (char) => `\\${char}`)}%`;
 }
@@ -132,31 +159,53 @@ export function parseSort(value: string | string[] | undefined): PersonSort {
   return sort === "most" || sort === "newest" || sort === "name" ? sort : "top";
 }
 
-/** A trimmed, length-limited search string from a search param. */
+/**
+ * A trimmed, length-limited search string from a search param. Empty for a
+ * kennitala-shaped query, which must never be searched or echoed (pages
+ * redirect those to the lookup form first; this is the backstop).
+ */
 export function parseQuery(value: string | string[] | undefined): string {
   const raw = Array.isArray(value) ? value[0] : value;
   // Postgres rejects NUL characters in text, so drop them rather than erroring.
   // Cut by code points (not UTF-16 units) so an emoji is never split in half,
   // and drop any lone surrogates the raw input already had.
   const cleaned = raw?.replaceAll("\u0000", "").toWellFormed().replaceAll("\uFFFD", "").trim() ?? "";
+  if (KENNITALA_SHAPED.test(cleaned)) return "";
   const query = Array.from(cleaned).slice(0, 100).join("").trim();
   // A query with no words (e.g. just ",") would otherwise match everything.
-  return searchPatterns(query).length > 0 ? query : "";
+  return searchTerms(query).length > 0 ? query : "";
 }
 
 /**
- * ILIKE patterns for each word of a search, so "Austin, TX" or "4521 Clark
- * Chicago" match even though the words live in different columns.
+ * The words of a search, folded like the stored search columns ("Þórdís" →
+ * "thordis"), so "Njalsgata 23, Reykjavik" matches across columns.
  */
-export function searchPatterns(query: string | undefined): string[] {
-  // De-duplicate ignoring case, but search with the words as typed: JavaScript
-  // and Postgres lower-case some letters differently (Greek final sigma,
-  // Turkish dotted İ), and ILIKE is already case-insensitive.
-  const words = new Map<string, string>();
+export function searchTerms(query: string | undefined): string[] {
+  const words = new Set<string>();
   for (const word of (query ?? "").split(/[\s,]+/)) {
-    if (word && !words.has(word.toLowerCase())) words.set(word.toLowerCase(), word);
+    const folded = foldForSearch(word);
+    if (folded) words.add(folded);
   }
-  return [...words.values()].slice(0, 8).map(likePattern);
+  return [...words].slice(0, 8);
+}
+
+// A person's city has no stored search column, so fold it in SQL like foldForSearch
+// does (lower() alone only folds ASCII under the C collation).
+const SINGLE_FOLDS = Object.entries(SEARCH_FOLDS).filter(([, plain]) => plain.length === 1);
+const MULTI_FOLDS = Object.entries(SEARCH_FOLDS).filter(([, plain]) => plain.length > 1);
+const TRANSLATE_FROM = [
+  ...SINGLE_FOLDS.flatMap(([accented]) => [accented, accented.toUpperCase()]),
+  ...MULTI_FOLDS.map(([accented]) => accented.toUpperCase()),
+].join("");
+const TRANSLATE_TO = [
+  ...SINGLE_FOLDS.flatMap(([, plain]) => [plain, plain]),
+  ...MULTI_FOLDS.map(([accented]) => accented),
+].join("");
+
+function foldedSql(column: AnyColumn): SQL {
+  let folded = sql`translate(lower(${column}), ${TRANSLATE_FROM}, ${TRANSLATE_TO})`;
+  for (const [accented, plain] of MULTI_FOLDS) folded = sql`replace(${folded}, ${accented}, ${plain})`;
+  return folded;
 }
 
 function paginate<T>(items: T[], total: number, page: number, pageSize: number): Paginated<T> {
@@ -165,15 +214,24 @@ function paginate<T>(items: T[], total: number, page: number, pageSize: number):
 
 const averageRating = sql<number | null>`round(avg(${reviews.rating}), 2)`.mapWith(Number);
 
+// The users row of the surrounding query, for correlated subqueries. Drizzle leaves
+// column names unqualified in a single-table select list, and inside a subquery a
+// bare "id" would mean the subquery's own table.
+const USERS_ID = sql.raw(`"users"."id"`);
+
 const publicUserColumns = {
   id: users.id,
   name: users.name,
   isLandlord: users.isLandlord,
   isRenter: users.isRenter,
+  isCompany: users.isCompany,
+  hasAccount: sql<boolean>`${users.passwordHash} is not null`,
   city: users.city,
   bio: users.bio,
-  createdAt: users.createdAt,
-  deletedAt: users.deletedAt,
+  joinedAt: users.joinedAt,
+  firstReviewedAt: sql<Date | null>`(
+    select min(${reviews.createdAt}) from ${reviews} where ${reviews.subjectUserId} = ${USERS_ID}
+  )`.mapWith(reviews.createdAt),
 };
 
 function targetCondition(target: ReviewTarget): SQL {
@@ -182,13 +240,8 @@ function targetCondition(target: ReviewTarget): SQL {
     : eq(reviews.propertyId, target.propertyId);
 }
 
-/** "1408 E 6th St, Unit 2B" */
-export function propertyLabel(p: { address: string; unit: string | null }): string {
-  return p.unit ? `${p.address}, Unit ${p.unit}` : p.address;
-}
-
 // ---------------------------------------------------------------------------
-// People (landlords and renters)
+// People (landlords and renters, with or without an account)
 // ---------------------------------------------------------------------------
 
 // Memoized per request: generateMetadata and the page both ask for the same row.
@@ -211,17 +264,19 @@ export async function listPeople(options: {
   const { role, query, sort = "top", page = 1, pageSize = PAGE_SIZE } = options;
   const db = await getDb();
 
-  const personText = sql`concat_ws(' ', ${users.name}, ${users.city})`;
   const where = and(
     eq(roleColumn(role), true),
-    ...searchPatterns(query).map((pattern) => ilike(personText, pattern)),
+    // Every word must match the name or (only accounts have one) the city.
+    ...searchTerms(query).map((term) =>
+      or(like(users.nameSearch, likePattern(term)), like(foldedSql(users.city), likePattern(term))),
+    ),
   );
 
-  const byName = [sql`lower(${users.name})`, asc(users.name)];
+  const byName = [asc(users.nameSort), asc(users.id)];
   const orderBy = {
     top: [sql`avg(${reviews.rating}) desc nulls last`, desc(count(reviews.id)), ...byName],
     most: [desc(count(reviews.id)), sql`avg(${reviews.rating}) desc nulls last`, ...byName],
-    newest: [desc(users.createdAt)],
+    newest: [desc(users.createdAt), asc(users.id)],
     name: byName,
   }[sort];
 
@@ -232,7 +287,7 @@ export async function listPeople(options: {
         average: averageRating,
         reviewCount: count(reviews.id),
         propertyCount: sql<number>`(
-          select count(*) from ${properties} where ${properties.landlordId} = ${users.id}
+          select count(*) from ${properties} where ${properties.landlordId} = ${USERS_ID}
         )`.mapWith(Number),
       })
       .from(users)
@@ -240,7 +295,7 @@ export async function listPeople(options: {
       .leftJoin(reviews, and(eq(reviews.subjectUserId, users.id), eq(reviews.kind, role)))
       .where(where)
       .groupBy(users.id)
-      .orderBy(...orderBy, asc(users.id))
+      .orderBy(...orderBy)
       .limit(pageSize)
       .offset((page - 1) * pageSize),
     db.select({ total: count() }).from(users).where(where),
@@ -255,14 +310,44 @@ export async function listPeople(options: {
 
 const landlordUser = alias(users, "landlord_user");
 
+const propertyColumns = {
+  id: properties.id,
+  address: properties.address,
+  unit: properties.unit,
+  postalCode: properties.postalCode,
+  description: properties.description,
+  createdById: properties.createdById,
+  createdAt: properties.createdAt,
+  landlordId: landlordUser.id,
+  landlordName: landlordUser.name,
+  landlordHasAccount: sql<boolean>`${landlordUser.passwordHash} is not null`,
+};
+
+type PropertyRow = {
+  postalCode: number;
+  landlordId: string | null;
+  landlordName: string | null;
+  landlordHasAccount: boolean;
+};
+
+function toPropertyDetail<T extends PropertyRow>({ landlordId, landlordName, landlordHasAccount, ...rest }: T) {
+  return {
+    ...rest,
+    place: placeName(rest.postalCode),
+    landlord: landlordId && landlordName ? { id: landlordId, name: landlordName, hasAccount: landlordHasAccount } : null,
+  };
+}
+
 export async function listProperties(options: {
   query?: string;
   sort?: PersonSort;
   page?: number;
   pageSize?: number;
+  /** Only properties this person is the landlord of. */
   landlordId?: string;
+  /** Only properties this person added. */
   createdById?: string;
-  /** Leave out properties this landlord manages. */
+  /** Leave out properties this person is the landlord of. */
   notLandlordId?: string;
 }): Promise<Paginated<PropertyListItem>> {
   const {
@@ -276,62 +361,45 @@ export async function listProperties(options: {
   } = options;
   const db = await getDb();
 
-  // Everything a renter might type: "1408 E 6th St, Unit 2B, Austin TX 78702", or the landlord.
-  const propertyText = sql`concat_ws(' ', ${properties.address}, 'Unit ' || ${properties.unit},
-    ${properties.city}, ${properties.region}, ${properties.postalCode}, ${landlordUser.name})`;
   const where = and(
     landlordId ? eq(properties.landlordId, landlordId) : undefined,
     createdById ? eq(properties.createdById, createdById) : undefined,
     notLandlordId
       ? or(isNull(properties.landlordId), ne(properties.landlordId, notLandlordId))
       : undefined,
-    ...searchPatterns(query).map((pattern) => ilike(propertyText, pattern)),
+    // Every word must match the address and apartment, or name the postcode or place.
+    ...searchTerms(query).map((term) => {
+      const postcodes = postcodesMatching(term);
+      return or(
+        like(properties.addressSearch, likePattern(term)),
+        postcodes.length > 0 ? inArray(properties.postalCode, postcodes) : undefined,
+      );
+    }),
   );
 
-  const byAddress = [sql`lower(${properties.address})`, sql`lower(coalesce(${properties.unit}, ''))`];
+  const byAddress = [asc(properties.addressSort), asc(properties.postalCode), asc(properties.id)];
   const orderBy = {
     top: [sql`avg(${reviews.rating}) desc nulls last`, desc(count(reviews.id)), ...byAddress],
     most: [desc(count(reviews.id)), sql`avg(${reviews.rating}) desc nulls last`, ...byAddress],
-    newest: [desc(properties.createdAt)],
+    newest: [desc(properties.createdAt), asc(properties.id)],
     name: byAddress,
   }[sort];
 
   const [rows, [{ total }]] = await Promise.all([
     db
-      .select({
-        id: properties.id,
-        address: properties.address,
-        unit: properties.unit,
-        city: properties.city,
-        region: properties.region,
-        postalCode: properties.postalCode,
-        description: properties.description,
-        createdAt: properties.createdAt,
-        landlordId: landlordUser.id,
-        landlordName: landlordUser.name,
-        average: averageRating,
-        reviewCount: count(reviews.id),
-      })
+      .select({ ...propertyColumns, average: averageRating, reviewCount: count(reviews.id) })
       .from(properties)
       .leftJoin(landlordUser, eq(landlordUser.id, properties.landlordId))
       .leftJoin(reviews, eq(reviews.propertyId, properties.id))
       .where(where)
       .groupBy(properties.id, landlordUser.id)
-      .orderBy(...orderBy, asc(properties.id))
+      .orderBy(...orderBy)
       .limit(pageSize)
       .offset((page - 1) * pageSize),
-    db
-      .select({ total: count() })
-      .from(properties)
-      .leftJoin(landlordUser, eq(landlordUser.id, properties.landlordId))
-      .where(where),
+    db.select({ total: count() }).from(properties).where(where),
   ]);
 
-  const items = rows.map(({ landlordId: lid, landlordName, ...rest }) => ({
-    ...rest,
-    landlord: lid && landlordName ? { id: lid, name: landlordName } : null,
-  }));
-  return paginate(items, total, page, pageSize);
+  return paginate(rows.map(toPropertyDetail), total, page, pageSize);
 }
 
 // Memoized per request: generateMetadata and the page both ask for the same row.
@@ -339,64 +407,31 @@ export const getProperty = cache(async (id: string): Promise<PropertyDetail | nu
   if (!isUuid(id)) return null;
   const db = await getDb();
   const [row] = await db
-    .select({
-      id: properties.id,
-      address: properties.address,
-      unit: properties.unit,
-      city: properties.city,
-      region: properties.region,
-      postalCode: properties.postalCode,
-      description: properties.description,
-      createdAt: properties.createdAt,
-      landlordId: landlordUser.id,
-      landlordName: landlordUser.name,
-    })
+    .select(propertyColumns)
     .from(properties)
     .leftJoin(landlordUser, eq(landlordUser.id, properties.landlordId))
     .where(eq(properties.id, id))
     .limit(1);
-  if (!row) return null;
-  const { landlordId, landlordName, ...rest } = row;
-  return {
-    ...rest,
-    landlord: landlordId && landlordName ? { id: landlordId, name: landlordName } : null,
-  };
+  return row ? toPropertyDetail(row) : null;
 });
 
-/** An existing property at the same address (case-insensitive), if any. */
+/**
+ * An existing property at the same address, apartment and postcode, compared
+ * the way the unique index does (folded: "NJÁLSGATA 23, íbúð 0201" is "Njálsgata 23 0201").
+ */
 export async function findPropertyByAddress(p: {
   address: string;
   unit: string | null;
-  city: string;
-  region: string;
+  postalCode: number;
 }): Promise<{ id: string } | null> {
   const db = await getDb();
+  const { addressSearch } = propertyAddressKeys(p.address, p.unit);
   const [row] = await db
     .select({ id: properties.id })
     .from(properties)
-    .where(
-      and(
-        sql`lower(${properties.address}) = lower(${p.address})`,
-        sql`lower(coalesce(${properties.unit}, '')) = lower(${p.unit ?? ""})`,
-        sql`lower(${properties.city}) = lower(${p.city})`,
-        sql`lower(${properties.region}) = lower(${p.region})`,
-      ),
-    )
+    .where(and(eq(properties.addressSearch, addressSearch), eq(properties.postalCode, p.postalCode)))
     .limit(1);
   return row ?? null;
-}
-
-/** Landlords to pick from when a renter adds the place they rent. */
-export async function listLandlordOptions(): Promise<
-  { id: string; name: string; city: string | null }[]
-> {
-  const db = await getDb();
-  return db
-    .select({ id: users.id, name: users.name, city: users.city })
-    .from(users)
-    .where(and(eq(users.isLandlord, true), isNull(users.deletedAt)))
-    .orderBy(sql`lower(${users.name})`, asc(users.name))
-    .limit(1000);
 }
 
 // ---------------------------------------------------------------------------
@@ -430,7 +465,7 @@ async function queryReviews(options: {
       propertyId: properties.id,
       propertyAddress: properties.address,
       propertyUnit: properties.unit,
-      propertyCity: properties.city,
+      propertyPostalCode: properties.postalCode,
     })
     .from(reviews)
     .innerJoin(author, eq(author.id, reviews.authorId))
@@ -460,7 +495,10 @@ async function queryReviews(options: {
         ? {
             kind: "property",
             id: row.propertyId!,
-            name: `${propertyLabel({ address: row.propertyAddress!, unit: row.propertyUnit })}, ${row.propertyCity}`,
+            address: row.propertyAddress!,
+            unit: row.propertyUnit,
+            postalCode: row.propertyPostalCode!,
+            place: placeName(row.propertyPostalCode!),
           }
         : { kind: row.kind, id: row.subjectUserId!, name: row.subjectUserName! },
   }));
@@ -553,6 +591,7 @@ export async function getReviewByAuthor(
 // Site-wide
 // ---------------------------------------------------------------------------
 
+/** Counts for the home page. People are counted with or without an account. */
 export async function getSiteStats(): Promise<{
   landlords: number;
   renters: number;

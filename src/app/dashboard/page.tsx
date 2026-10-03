@@ -4,6 +4,10 @@ import { CardGrid, PropertyCard } from "@/components/cards";
 import { RatingSummary } from "@/components/rating-summary";
 import { ReviewList } from "@/components/review-card";
 import { ButtonLink, Card, EmptyState, PageHeader, RoleBadge } from "@/components/ui";
+import { getDb } from "@/db";
+import type { UserRole } from "@/db/schema";
+import type { Format } from "@/i18n/format";
+import { getFormat, getT, type T } from "@/i18n/server";
 import { requireUser } from "@/lib/auth/current-user";
 import {
   getRatingSummary,
@@ -12,27 +16,45 @@ import {
   listReviewsByAuthor,
   listReviewsOfLandlordProperties,
 } from "@/lib/data";
-import { profilePath } from "@/lib/paths";
-import { reviewerRole, rolesOf } from "@/lib/roles";
+import { formatKennitala } from "@/lib/kennitala";
+import { profilePath, reportPath } from "@/lib/paths";
+import { getOwnKennitala, isNameLocked } from "@/lib/people";
+import { rolesOf } from "@/lib/roles";
 import { safeRedirectPath } from "@/lib/validation";
 import { DeleteAccount } from "./delete-account";
 import { PasswordForm, SignOutOthersForm } from "./password-form";
 import { ProfileForm } from "./profile-form";
 import { RolesForm } from "./roles-form";
 
-export const metadata: Metadata = { title: "My account" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getT();
+  return { title: t("meta.pages.dashboard") };
+}
 
 const ABOUT_ME_SHOWN = 20;
 const PROPERTY_REVIEWS_SHOWN = 20;
 const WRITTEN_SHOWN = 50;
 const PROPERTIES_SHOWN = 60;
 
+// Message keys (whole sentences per role).
+const ABOUT_ME_HEADING = {
+  landlord: "account.aboutYou.asLandlord",
+  renter: "account.aboutYou.asRenter",
+} as const satisfies Record<UserRole, string>;
+
+const ABOUT_ME_EMPTY = {
+  landlord: { title: "account.aboutYou.emptyLandlord.title", body: "account.aboutYou.emptyLandlord.body" },
+  renter: { title: "account.aboutYou.emptyRenter.title", body: "account.aboutYou.emptyRenter.body" },
+} as const satisfies Record<UserRole, { title: string; body: string }>;
+
 function ShowingNote({
+  t,
   shown,
   total,
   href,
   label,
 }: {
+  t: T;
   shown: number;
   total: number;
   href?: string;
@@ -41,7 +63,7 @@ function ShowingNote({
   if (total <= shown) return null;
   return (
     <p className="text-sm text-muted">
-      Showing the latest {shown} of {total}.{" "}
+      {t("account.dashboard.showing", { shown, total })}{" "}
       {href && (
         <Link href={href} className="font-semibold text-brand hover:underline">
           {label}
@@ -51,15 +73,22 @@ function ShowingNote({
   );
 }
 
+/** "(3)" after a section heading. */
+function Count({ value, format }: { value: number; format: Format }) {
+  return <span className="font-normal text-muted">({format.number(value)})</span>;
+}
+
 export default async function DashboardPage({ searchParams }: PageProps<"/dashboard">) {
   const user = await requireUser("/dashboard");
+  const [t, format, query] = await Promise.all([getT(), getFormat(), searchParams]);
   // Set when the review panel sent them here to add a role.
-  const next = safeRedirectPath((await searchParams).next, "") || undefined;
+  const next = safeRedirectPath(query.next, "") || undefined;
   const { isLandlord, isRenter } = user;
   const roles = rolesOf(user);
   const both = roles.length > 1;
 
-  const [aboutMe, propertyReviews, written, managed, added] = await Promise.all([
+  const db = await getDb();
+  const [aboutMe, propertyReviews, written, managed, added, kennitala, nameLocked] = await Promise.all([
     // Ratings are kept separately for each role.
     Promise.all(
       roles.map(async (role) => ({
@@ -79,35 +108,39 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
           pageSize: PROPERTIES_SHOWN,
         })
       : null,
+    getOwnKennitala(user.id),
+    isNameLocked(db, user.id),
   ]);
+  // Just signed up with a kennitala others had reviewed: the page kept their name.
+  const keptName = query.name === "kept" && nameLocked;
+  const reportName = reportPath("profile", user.id);
 
   const propertySections = [
     managed && {
       id: "managed",
-      title: "Your properties",
+      title: t("account.properties.managed"),
       addHref: "/properties/new?as=landlord",
       result: managed,
-      emptyTitle: "You haven't listed any properties",
-      emptyBody:
-        "Add the homes you rent out so your renters can review them. If a renter already listed one, open it and choose “I manage this property”.",
+      emptyTitle: t("account.properties.managedEmptyTitle"),
+      emptyBody: t("account.properties.managedEmptyBody"),
     },
     added && {
       id: "added",
-      title: isLandlord ? "Places you added as a renter" : "Properties you added",
+      title: t(isLandlord ? "account.properties.addedAsRenter" : "account.properties.added"),
       addHref: isLandlord ? "/properties/new?as=renter" : "/properties/new",
       result: added,
-      emptyTitle: "You haven't added any properties",
-      emptyBody: "Can't find the place you rent? Add it so you can review it.",
+      emptyTitle: t("account.properties.addedEmptyTitle"),
+      emptyBody: t("account.properties.addedEmptyBody"),
     },
   ].filter((section) => !!section);
 
   return (
     <div className="mx-auto max-w-6xl space-y-10 px-4 py-10 sm:px-6">
       <PageHeader
-        title={<>Hi, {user.name.split(" ")[0]}</>}
+        title={t("account.dashboard.greeting", { name: user.name.split(" ")[0] })}
         description={
           <span className="inline-flex flex-wrap items-center gap-2">
-            <span className="break-all">Signed in as {user.email}</span>
+            <span className="break-all">{t("account.dashboard.signedInAs", { email: user.email })}</span>
             {roles.map((role) => (
               <RoleBadge key={role} role={role} />
             ))}
@@ -115,21 +148,33 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
         }
         actions={
           <ButtonLink href={profilePath(user)} variant="secondary">
-            View public profile
+            {t("account.dashboard.viewProfile")}
           </ButtonLink>
         }
       />
 
-      <section aria-label="Quick actions" className="flex flex-wrap gap-2">
-        {isRenter && <ButtonLink href="/landlords">Review a landlord</ButtonLink>}
-        {isLandlord && <ButtonLink href="/renters">Review a renter</ButtonLink>}
+      {keptName && (
+        <p role="status" className="rounded-xl border border-line bg-surface px-4 py-3 text-sm text-ink">
+          {t.rich("account.dashboard.keptName", {
+            report: (
+              <Link href={reportName} className="font-semibold text-brand hover:underline">
+                {t("account.dashboard.report")}
+              </Link>
+            ),
+          })}
+        </p>
+      )}
+
+      <section aria-label={t("account.dashboard.quickActions")} className="flex flex-wrap gap-2">
+        {isRenter && <ButtonLink href="/landlords">{t("account.dashboard.reviewLandlord")}</ButtonLink>}
+        {isLandlord && <ButtonLink href="/renters">{t("account.dashboard.reviewRenter")}</ButtonLink>}
         {isRenter && (
           <ButtonLink href="/properties" variant="secondary">
-            Review a property
+            {t("account.dashboard.reviewProperty")}
           </ButtonLink>
         )}
         <ButtonLink href={isLandlord ? "/properties/new?as=landlord" : "/properties/new"} variant="secondary">
-          {isLandlord ? "Add a property" : "Add the place you rent"}
+          {t(isLandlord ? "account.dashboard.addProperty" : "account.dashboard.addPlaceYouRent")}
         </ButtonLink>
       </section>
 
@@ -137,10 +182,13 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
         <div className="space-y-10">
           {aboutMe.map(({ role, summary, reviews }) => (
             <section key={role} aria-labelledby={`about-me-${role}`} className="space-y-4">
-              <h2 id={`about-me-${role}`} className="text-xl font-bold tracking-tight text-ink">
-                Reviews about you{both ? ` as a ${role}` : ""}{" "}
-                <span className="font-normal text-muted">({reviews.total})</span>
-              </h2>
+              <div className="space-y-1">
+                <h2 id={`about-me-${role}`} className="text-xl font-bold tracking-tight text-ink">
+                  {t(both ? ABOUT_ME_HEADING[role] : "account.aboutYou.heading")}{" "}
+                  <Count value={reviews.total} format={format} />
+                </h2>
+                <p className="text-sm text-muted">{t("account.aboutYou.cantRemove")}</p>
+              </div>
               <Card>
                 <RatingSummary summary={summary} />
               </Card>
@@ -148,18 +196,15 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
                 <>
                   <ReviewList reviews={reviews.items} viewerId={user.id} />
                   <ShowingNote
+                    t={t}
                     shown={reviews.items.length}
                     total={reviews.total}
                     href={`${profilePath(user, role)}#reviews`}
-                    label="See them all on your profile"
+                    label={t("account.aboutYou.seeAll")}
                   />
                 </>
               ) : (
-                <EmptyState title={`No ${reviewerRole(role)}s have reviewed you yet`}>
-                  {role === "landlord"
-                    ? "When your renters review you, it'll show up here. Share your profile link with them!"
-                    : "When your landlords review you, it'll show up here."}
-                </EmptyState>
+                <EmptyState title={t(ABOUT_ME_EMPTY[role].title)}>{t(ABOUT_ME_EMPTY[role].body)}</EmptyState>
               )}
             </section>
           ))}
@@ -167,35 +212,34 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
           {propertyReviews && (
             <section aria-labelledby="property-reviews-heading" className="space-y-4">
               <h2 id="property-reviews-heading" className="text-xl font-bold tracking-tight text-ink">
-                Reviews of your properties{" "}
-                <span className="font-normal text-muted">({propertyReviews.total})</span>
+                {t("account.propertyReviews.heading")} <Count value={propertyReviews.total} format={format} />
               </h2>
               {propertyReviews.items.length > 0 ? (
                 <>
                   <ReviewList reviews={propertyReviews.items} viewerId={user.id} showSubject />
-                  <ShowingNote shown={propertyReviews.items.length} total={propertyReviews.total} />
+                  <ShowingNote t={t} shown={propertyReviews.items.length} total={propertyReviews.total} />
                 </>
               ) : (
-                <EmptyState title="No property reviews yet" />
+                <EmptyState title={t("account.propertyReviews.empty")} />
               )}
             </section>
           )}
 
           <section aria-labelledby="written-heading" className="space-y-4">
             <h2 id="written-heading" className="text-xl font-bold tracking-tight text-ink">
-              Reviews you&apos;ve written <span className="font-normal text-muted">({written.total})</span>
+              {t("account.written.heading")} <Count value={written.total} format={format} />
             </h2>
             {written.items.length > 0 ? (
               <>
                 <ReviewList reviews={written.items} viewerId={user.id} showSubject />
-                <ShowingNote shown={written.items.length} total={written.total} />
+                <ShowingNote t={t} shown={written.items.length} total={written.total} />
               </>
             ) : (
               <EmptyState
-                title="You haven't written any reviews yet"
+                title={t("account.written.empty")}
                 action={
                   <ButtonLink href={isRenter ? "/landlords" : "/renters"}>
-                    {isRenter ? "Find your landlord" : "Find a renter to review"}
+                    {t(isRenter ? "account.written.findLandlord" : "account.written.findRenter")}
                   </ButtonLink>
                 }
               />
@@ -206,10 +250,10 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
             <section key={section.id} aria-labelledby={`${section.id}-heading`} className="space-y-4">
               <div className="flex items-end justify-between gap-4">
                 <h2 id={`${section.id}-heading`} className="text-xl font-bold tracking-tight text-ink">
-                  {section.title} <span className="font-normal text-muted">({section.result.total})</span>
+                  {section.title} <Count value={section.result.total} format={format} />
                 </h2>
                 <Link href={section.addHref} className="text-sm font-semibold text-brand hover:underline">
-                  Add a property
+                  {t("account.properties.add")}
                 </Link>
               </div>
               {section.result.items.length > 0 ? (
@@ -221,7 +265,7 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
                       </li>
                     ))}
                   </CardGrid>
-                  <ShowingNote shown={section.result.items.length} total={section.result.total} />
+                  <ShowingNote t={t} shown={section.result.items.length} total={section.result.total} />
                 </>
               ) : (
                 <EmptyState title={section.emptyTitle}>{section.emptyBody}</EmptyState>
@@ -233,10 +277,8 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
         <aside className="space-y-6">
           <Card as="section">
             <div id="roles">
-              <h2 className="text-lg font-semibold text-ink">Your roles</h2>
-              <p className="mt-1 text-sm text-muted">
-                Rent a home and also rent one out? Have both. You get a separate rating for each.
-              </p>
+              <h2 className="text-lg font-semibold text-ink">{t("account.roles.heading")}</h2>
+              <p className="mt-1 text-sm text-muted">{t("account.roles.intro")}</p>
               <div className="mt-4">
                 <RolesForm
                   isLandlord={isLandlord}
@@ -248,17 +290,27 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
             </div>
           </Card>
           <Card as="section">
-            <h2 className="text-lg font-semibold text-ink">Your profile</h2>
-            <p className="mt-1 text-sm text-muted">This is what people see on your public page.</p>
+            <h2 className="text-lg font-semibold text-ink">{t("account.profile.heading")}</h2>
+            <p className="mt-1 text-sm text-muted">{t("account.profile.intro")}</p>
+            {kennitala && (
+              <div className="mt-4 rounded-xl border border-line bg-surface-muted px-3.5 py-2.5">
+                <p className="text-sm text-ink">
+                  {t("account.profile.kennitala", { kennitala: formatKennitala(kennitala) })}
+                </p>
+                <p className="mt-0.5 text-xs text-muted">{t("account.profile.kennitalaNote")}</p>
+              </div>
+            )}
             <div className="mt-5">
-              <ProfileForm user={{ name: user.name, city: user.city, bio: user.bio }} />
+              <ProfileForm
+                user={{ name: user.name, city: user.city, bio: user.bio }}
+                nameLocked={nameLocked}
+                reportHref={reportName}
+              />
             </div>
           </Card>
           <Card as="section">
-            <h2 className="text-lg font-semibold text-ink">Password &amp; sessions</h2>
-            <p className="mt-1 text-sm text-muted">
-              Changing your password signs you out everywhere else.
-            </p>
+            <h2 className="text-lg font-semibold text-ink">{t("account.password.heading")}</h2>
+            <p className="mt-1 text-sm text-muted">{t("account.password.intro")}</p>
             <div className="mt-5">
               <PasswordForm />
             </div>
@@ -267,11 +319,9 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
             </div>
           </Card>
           <Card as="section">
-            <h2 className="text-lg font-semibold text-ink">Close account</h2>
-            <p className="mt-1 text-sm text-muted">
-              Deletes your login and the reviews you wrote. Reviews other people wrote about you stay
-              public on your profile, marked as closed.
-            </p>
+            <h2 className="text-lg font-semibold text-ink">{t("account.close.heading")}</h2>
+            <p className="mt-1 text-sm text-muted">{t("account.close.body")}</p>
+            <p className="mt-1 text-sm text-muted">{t("account.close.again")}</p>
             <div className="mt-4">
               <DeleteAccount />
             </div>

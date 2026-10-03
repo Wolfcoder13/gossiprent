@@ -40,12 +40,18 @@ import {
   clearAttempts,
   clientIp,
   consumeAttempt,
+  kennitalaCheckLimits,
+  kennitalaMismatchLimits,
+  newProfileLimits,
+  newReviewLimits,
   RATE_LIMITS,
+  reportLimits,
   type RateLimit,
 } from "@/lib/auth/rate-limit";
 
 const MINUTE = 60 * 1000;
 const HOUR = 60 * MINUTE;
+const DAY = 24 * HOUR;
 
 let keyCounter = 0;
 /** A key no other test uses, so tests don't see each other's attempts. */
@@ -121,12 +127,100 @@ describe("RATE_LIMITS", () => {
       loginPerIp: { max: 50, windowMs: 15 * MINUTE },
       signupPerIp: { max: 20, windowMs: HOUR },
       passwordChangePerUser: { max: 10, windowMs: 15 * MINUTE },
+      kennitalaChecksPerUser: { max: 10, windowMs: 15 * MINUTE },
+      kennitalaChecksPerUserDaily: { max: 50, windowMs: DAY },
+      kennitalaChecksPerIp: { max: 100, windowMs: DAY },
+      kennitalaMismatchPerSubject: { max: 20, windowMs: DAY },
+      newReviewsPerAuthor: { max: 20, windowMs: DAY },
+      newProfilesPerAuthor: { max: 5, windowMs: DAY },
+      reportsPerUser: { max: 10, windowMs: DAY },
+      reportsPerIp: { max: 20, windowMs: DAY },
     });
+  });
+
+  it("has no window longer than a day, since older attempts are pruned", () => {
+    for (const [name, limit] of Object.entries(RATE_LIMITS)) {
+      expect(limit.windowMs, name).toBeLessThanOrEqual(DAY);
+    }
   });
 
   it("keeps the per-account backstop well above the per-network limit", () => {
     // Otherwise a stranger could lock the owner out from a single network.
     expect(RATE_LIMITS.loginPerAccount.max).toBeGreaterThanOrEqual(5 * RATE_LIMITS.loginPerAccountAndIp.max);
+  });
+});
+
+describe("limits for kennitala checks, new reviews, new profiles and reports", () => {
+  const USER = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+  const SUBJECT = "9a0c0305-4f89-41d3-3f25-04e0e82c3301";
+
+  it("limit kennitala checks per user in two windows, and per network when it's known", () => {
+    expect(kennitalaCheckLimits(USER, "203.0.113.7")).toEqual([
+      { key: `kt:user15:${USER}`, ...RATE_LIMITS.kennitalaChecksPerUser },
+      { key: `kt:userday:${USER}`, ...RATE_LIMITS.kennitalaChecksPerUserDaily },
+      { key: "kt:ip:203.0.113.7", ...RATE_LIMITS.kennitalaChecksPerIp },
+    ]);
+    expect(kennitalaCheckLimits(USER, null).map((limit) => limit.key)).toEqual([
+      `kt:user15:${USER}`,
+      `kt:userday:${USER}`,
+    ]);
+  });
+
+  it("limit mismatches per profile, new reviews and new profiles per author", () => {
+    expect(kennitalaMismatchLimits(SUBJECT)).toEqual([
+      { key: `kt:subject:${SUBJECT}`, ...RATE_LIMITS.kennitalaMismatchPerSubject },
+    ]);
+    expect(newReviewLimits(USER)).toEqual([{ key: `review-new:user:${USER}`, ...RATE_LIMITS.newReviewsPerAuthor }]);
+    expect(newProfileLimits(USER)).toEqual([{ key: `profile-new:user:${USER}`, ...RATE_LIMITS.newProfilesPerAuthor }]);
+  });
+
+  it("limit reports per user and per network, whichever are known", () => {
+    expect(reportLimits(USER, "2001:db8::1")).toEqual([
+      { key: `report:user:${USER}`, ...RATE_LIMITS.reportsPerUser },
+      { key: "report:ip:2001:db8::1", ...RATE_LIMITS.reportsPerIp },
+    ]);
+    expect(reportLimits(null, "2001:db8::1").map((limit) => limit.key)).toEqual(["report:ip:2001:db8::1"]);
+    expect(reportLimits(USER, null).map((limit) => limit.key)).toEqual([`report:user:${USER}`]);
+  });
+
+  it("never put anything but ids and IP addresses in a key (no kennitala can reach one)", () => {
+    const keys = [
+      ...kennitalaCheckLimits(USER, "203.0.113.7"),
+      ...kennitalaMismatchLimits(SUBJECT),
+      ...newReviewLimits(USER),
+      ...newProfileLimits(USER),
+      ...reportLimits(USER, "203.0.113.7"),
+    ].map((limit) => limit.key);
+    for (const key of keys) expect(key).not.toMatch(/(?<![0-9a-f-])\d{6}-?\d{4}(?![0-9a-f-])/);
+  });
+
+  it("10 kennitala checks in 15 minutes are allowed, the 11th isn't; another user is unaffected", async () => {
+    const user = crypto.randomUUID();
+    expect(await consumeTimes(kennitalaCheckLimits(user, null), 10)).toBe(0);
+    expect((await consumeAttempt(kennitalaCheckLimits(user, null))).limited).toBe(true);
+    expect((await consumeAttempt(kennitalaCheckLimits(crypto.randomUUID(), null))).limited).toBe(false);
+  });
+
+  it("the daily kennitala limit applies even when the 15-minute one doesn't", async () => {
+    const user = crypto.randomUUID();
+    // 50 checks earlier today, none in the last 15 minutes.
+    await insertAttemptsAt(`kt:userday:${user}`, Array.from({ length: 50 }, () => HOUR));
+    expect((await consumeAttempt(kennitalaCheckLimits(user, null))).limited).toBe(true);
+  });
+
+  it("a released check (e.g. a kennitala that matched the profile) doesn't count", async () => {
+    const user = crypto.randomUUID();
+    for (let i = 0; i < 15; i++) {
+      const attempt = await consumeAttempt(kennitalaCheckLimits(user, null));
+      expect(attempt.limited, `check ${i + 1}`).toBe(false);
+      await attempt.release();
+    }
+  });
+
+  it("5 new profiles a day per author are allowed, the 6th isn't", async () => {
+    const user = crypto.randomUUID();
+    expect(await consumeTimes(newProfileLimits(user), 5)).toBe(0);
+    expect((await consumeAttempt(newProfileLimits(user))).limited).toBe(true);
   });
 });
 
@@ -351,16 +445,18 @@ describe("consumeAttempt", () => {
   it("now and then prunes attempts older than a day, keeping recent ones", async () => {
     const old = freshKey("old");
     const recent = freshKey("recent");
+    // Made before Math.random is mocked, which would make them repeat across runs.
+    const untriggered = freshKey();
+    const trigger = freshKey();
     await insertAttemptsAt(old, [25 * HOUR, 48 * HOUR]);
     await insertAttemptsAt(recent, [23 * HOUR, 1 * MINUTE]);
 
     // Without the 5% chance hitting, nothing is pruned.
     vi.spyOn(Math, "random").mockReturnValue(0.99);
-    await consumeAttempt([limit(freshKey())]);
+    await consumeAttempt([limit(untriggered)]);
     expect(await attemptsFor(old)).toBe(2);
 
     vi.spyOn(Math, "random").mockReturnValue(0);
-    const trigger = freshKey();
     await consumeAttempt([limit(trigger)]);
     expect(await attemptsFor(old)).toBe(0);
     expect(await attemptsFor(recent)).toBe(2);

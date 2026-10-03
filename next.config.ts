@@ -14,6 +14,9 @@ const nextConfig: NextConfig = {
     ],
   },
   poweredByHeader: false,
+  // `next dev` logs every Server Action call with its arguments, which include
+  // typed form values (kennitalas). Kennitalas must never reach the logs.
+  logging: { serverFunctions: false },
   async headers() {
     return [
       {
