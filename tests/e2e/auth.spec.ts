@@ -252,12 +252,14 @@ test.describe("sign up", () => {
 
     // Fix some fields but not others.
     const name = `Jóna ${nameToken()}`;
+    // A town of its own: other specs count search results for real towns.
+    const city = `Bær ${nameToken()}`;
     await roleCheckbox(page, "landlord").check();
     await signupKennitalaInput(page).fill(NOT_A_KENNITALA);
     await page.getByLabel("Name", { exact: true }).fill(name);
     await page.getByLabel("Email").fill("not-an-email");
     await page.getByLabel("Password").fill("short");
-    await page.getByLabel("City").fill("Akureyri");
+    await page.getByLabel("City").fill(city);
     await page.getByRole("button", { name: "Create account" }).click();
 
     await expect(page.getByText("That isn't a valid kennitala. Enter 10 digits, e.g. 123456-7890.")).toBeVisible();
@@ -275,7 +277,7 @@ test.describe("sign up", () => {
     await expect(signupKennitalaInput(page)).toHaveValue(NOT_A_KENNITALA);
     await expect(page.getByLabel("Name", { exact: true })).toHaveValue(name);
     await expect(page.getByLabel("Email")).toHaveValue("not-an-email");
-    await expect(page.getByLabel("City")).toHaveValue("Akureyri");
+    await expect(page.getByLabel("City")).toHaveValue(city);
     await expect(page.getByLabel("Password")).toHaveValue("");
     await expect(roleCheckbox(page, "landlord")).toBeChecked();
     await expect(roleCheckbox(page, "renter")).not.toBeChecked();
